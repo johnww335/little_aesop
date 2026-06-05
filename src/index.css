@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Nunito:wght@400;500;600;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --cream: #FDF6EC;
+  --warm-white: #FFFAF3;
+  --ink: #2C1A0E;
+  --ink-soft: #5C3D2A;
+  --ink-muted: #9C7B65;
+  --gold: #C8882A;
+  --gold-light: #F0C97A;
+  --gold-pale: #FBF0D8;
+  --forest: #2D5A3D;
+  --forest-light: #4A8A60;
+  --forest-pale: #EBF4EE;
+  --rose: #C0534A;
+  --rose-pale: #FAECEA;
+  --border: rgba(44,26,14,0.12);
+  --border-strong: rgba(44,26,14,0.22);
+  --shadow-sm: 0 1px 3px rgba(44,26,14,0.08);
+  --shadow-md: 0 4px 16px rgba(44,26,14,0.10);
+  --shadow-lg: 0 8px 32px rgba(44,26,14,0.13);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --font-display: 'Lora', Georgia, serif;
+  --font-body: 'Nunito', sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--gold); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+input, select {
+  font-family: var(--font-body);
+  font-size: 15px;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
