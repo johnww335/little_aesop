@@ -139,7 +139,7 @@ export async function createAndStartStory(childId, inputs) {
         if (devMode) {
           warn('Story', '⚠️  devMode=true sent to edge function — images will be placeholders', { storyId: story.id })
         }
-        if (body.functionVersion !== '2025-06-13') {
+        if (body.functionVersion !== '2025-06-15') {
           warn('Story', '⚠️  Old edge function still running — deploy generate-story to get GPT stories', {
             deployedVersion: body.functionVersion ?? 'unknown (pre-version)',
           })
@@ -205,7 +205,7 @@ export function inferGenerationErrorHint({ errorMessage, pagesCompleted, storyTi
 
   const hints = []
   const version = deployInfo?.functionVersion
-  if (!version || version !== '2025-06-13') {
+  if (!version || version !== '2025-06-15') {
     hints.push(`Edge function not up to date (deployed: ${version ?? 'unknown'}). Run: supabase functions deploy generate-story`)
   }
   if (deployInfo?.hasOpenAiKey === false) {
@@ -275,6 +275,26 @@ export async function getStoryStatus(storyId) {
   }
 }
 
+export async function deleteStory(storyId) {
+  log('Story', 'Deleting story', { storyId })
+
+  const { error } = await supabase
+    .from('stories')
+    .delete()
+    .eq('id', storyId)
+
+  if (error) {
+    logError('Story', 'Failed to delete story', { storyId, message: error.message })
+    const message = error.message?.includes('policy')
+      ? 'You do not have permission to delete this story. Run migration_phase5.sql in Supabase.'
+      : error.message
+    return { error: { ...error, message } }
+  }
+
+  log('Story', 'Story deleted', { storyId })
+  return { error: null }
+}
+
 export async function getStoriesForChild(childId) {
   const { data, error } = await supabase
     .from('stories')
@@ -283,7 +303,7 @@ export async function getStoriesForChild(childId) {
       pages (image_url, page_number)
     `)
     .eq('child_id', childId)
-    .in('status', ['pending', 'generating', 'ready'])
+    .in('status', ['pending', 'generating', 'ready', 'error'])
     .order('created_at', { ascending: false })
 
   if (data) {

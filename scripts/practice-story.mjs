@@ -53,13 +53,20 @@ function ageWritingGuide(age) {
   return 'Use engaging plots with warmth and humour appropriate for a pre-teen.'
 }
 
-function buildSystemPrompt(context) {
+function buildStorySystemPrompt(context, qualityAttempt) {
+  const escalation = qualityAttempt <= 1
+    ? ''
+    : qualityAttempt === 2
+      ? '\n\nIMPORTANT — the previous draft failed review. Write one clear linear adventure: setup (pages 1-5), rising action (6-15), satisfying ending (16-20). Every page must follow logically from the last and feel fun to read aloud.'
+      : '\n\nCRITICAL — multiple drafts failed review. Keep the plot simple: one hero, one journey, one problem to solve. Use vivid concrete scenes on every page. No filler or repetitive sentences. Make each page something a child would love.'
+
   return `You are a children's book author writing for ${context.childName}, who is ${context.childAge} years old.
 ${ageWritingGuide(context.childAge)}
 Rules:
 - Write exactly ${PAGE_COUNT} pages (one paragraph per page)
 - Each page should be 1-2 short sentences
-- Create a coherent PLOT: a beginning that sets up a goal or problem, a middle where events unfold, and a satisfying ending
+- The full story must make sense from beginning to end — clear setup, unfolding events, and a satisfying ending
+- Make it genuinely enjoyable for a ${context.childAge}-year-old: warm, playful, surprising, and fun to read aloud
 - Weave each child ANSWER below into the plot as story events — the answers are ingredients, not dialogue to recite
 - NEVER quote or mention the original prompt questions in the story text
 - NEVER write Q&A style lines like 'They wondered: "..."' or '"mouse!" they shouted'
@@ -68,10 +75,40 @@ Rules:
 - Each answer should inspire a concrete scene, action, character, place, or object — not be pasted as a bare noun
 - Example for answers mouse, Mars, trumpet: GOOD: "A tiny mouse scampered over the giant's boot." BAD: "The path led toward mouse."
 - Pages must be unique — do NOT repeat sentences across pages
-- Make it fun, warm, and engaging for a ${context.childAge}-year-old
 - Structure: beginning (pages 1-5), middle (pages 6-15), end (pages 16-20)
 - Return ONLY JSON: { "title": "Story Title", "pages": ["page 1", "page 2", ...] }
-- The pages array must contain exactly ${PAGE_COUNT} strings`
+- The pages array must contain exactly ${PAGE_COUNT} strings${escalation}`
+}
+
+function buildRevisionFeedback(review, inputs, context, attempt) {
+  const parts = []
+  if (review.feedback) parts.push(review.feedback)
+
+  if (!review.makesSense) {
+    parts.push(
+      attempt >= 2
+        ? 'CRITICAL: The story must make sense from beginning to end. Each page should follow logically from the previous one — clear opening goal, developing middle, happy resolution.'
+        : 'The story must read coherently from page 1 to page 20 with a clear beginning, middle, and end.',
+    )
+  }
+  if (!review.enjoyableForChild) {
+    parts.push(
+      attempt >= 2
+        ? `Make this genuinely fun for a ${context.childAge}-year-old: add humor, wonder, surprises, and warmth on every page.`
+        : `Make it more enjoyable for a ${context.childAge}-year-old — playful, engaging, and delightful to read aloud.`,
+    )
+  }
+  if (!review.usesInputsInPlot) {
+    parts.push(
+      `Weave these answers into the plot as events: ${review.missingInputs.join(', ') || inputs.map((i) => i.answer).join(', ')}.`,
+    )
+  }
+  if (!review.feelsNatural) {
+    parts.push(
+      'Rewrite so answers appear naturally in scenes. Do not quote the original questions or paste answers as bare nouns.',
+    )
+  }
+  return parts.filter(Boolean).join(' ')
 }
 
 async function chatJson(openaiKey, messages, maxTokens = 4096) {
@@ -99,15 +136,15 @@ async function chatJson(openaiKey, messages, maxTokens = 4096) {
   return JSON.parse(content)
 }
 
-async function generateStoryText(inputs, openaiKey, context) {
+async function generateStoryText(inputs, openaiKey, context, qualityAttempt = 1) {
   const storyBrief = formatStoryBrief(inputs)
   const revisionNote = context.revisionFeedback
     ? `\n\nFix these issues from the previous draft:\n${context.revisionFeedback}`
     : ''
 
-  console.log('\n--- Generating story text ---')
+  console.log(`\n--- Generating story text (review attempt ${qualityAttempt}) ---`)
   const story = await chatJson(openaiKey, [
-    { role: 'system', content: buildSystemPrompt(context) },
+    { role: 'system', content: buildStorySystemPrompt(context, qualityAttempt) },
     {
       role: 'user',
       content: `Write a children's story weaving ALL of these answers into the plot naturally. Use only the answers in the story — never the questions:\n${storyBrief}${revisionNote}`,
@@ -124,7 +161,7 @@ async function reviewStory(story, inputs, context, openaiKey) {
   const answerList = inputs.map((i) => i.answer).join(', ')
   const questionSnippets = inputs.map((i) => i.question)
 
-  console.log('--- Running quality review ---')
+  console.log('--- Pre-illustration review ---')
 
   const review = await chatJson(
     openaiKey,
@@ -132,23 +169,25 @@ async function reviewStory(story, inputs, context, openaiKey) {
       {
         role: 'system',
         content: `You are a children's book editor reviewing a story for a ${context.childAge}-year-old reader named ${context.childName}.
-Evaluate the draft against these three criteria:
-1. hasPlot — the story has a clear narrative arc (setup, events, resolution), not just a list of mentions
-2. isFunForAge — the tone, vocabulary, and humour are engaging and appropriate for age ${context.childAge}
+
+Answer these essential questions:
+1. makesSense — Does the story make sense from beginning to end? Is there a coherent narrative with logical flow page to page (not random disconnected scenes)?
+2. enjoyableForChild — Is this a good story that a child would genuinely enjoy? Is it fun, warm, engaging, and appropriate for age ${context.childAge}?
+
+Also verify (required for pass):
 3. usesInputsInPlot — each child answer (${answerList}) appears in the story AND drives part of the plot
 4. feelsNatural — reads like a real picture book; prompt questions are NOT quoted; no forced Q&A recitation of answers
 
 Return ONLY JSON:
 {
-  "passes": true,
-  "hasPlot": true,
-  "isFunForAge": true,
+  "makesSense": true,
+  "enjoyableForChild": true,
   "usesInputsInPlot": true,
   "feelsNatural": true,
-  "feedback": "brief editor notes if anything needs fixing",
+  "feedback": "brief editor notes explaining any failures",
   "missingInputs": ["answers that are missing or not part of the plot"]
 }
-Set passes to true only if ALL four criteria are met. Fail feelsNatural if any prompt question appears in the story or answers feel pasted in. Be constructive but firm in feedback when passes is false.`,
+Be constructive but firm. Fail makesSense if the arc is unclear or pages feel disconnected. Fail enjoyableForChild if it would bore or confuse a young reader.`,
       },
       {
         role: 'user',
@@ -158,9 +197,11 @@ Set passes to true only if ALL four criteria are met. Fail feelsNatural if any p
     500,
   )
 
-  review.passes = Boolean(
-    review.hasPlot && review.isFunForAge && review.usesInputsInPlot && review.feelsNatural,
-  )
+  review.makesSense = Boolean(review.makesSense)
+  review.enjoyableForChild = Boolean(review.enjoyableForChild)
+  review.usesInputsInPlot = Boolean(review.usesInputsInPlot)
+  review.feelsNatural = Boolean(review.feelsNatural)
+  review.passes = review.makesSense && review.enjoyableForChild && review.usesInputsInPlot && review.feelsNatural
   review.missingInputs = review.missingInputs ?? []
   review.feedback = review.feedback ?? ''
   return review
@@ -174,8 +215,8 @@ function printStory(story, review, attempt) {
   if (review) {
     console.log('\nReview:', {
       passes: review.passes,
-      hasPlot: review.hasPlot,
-      isFunForAge: review.isFunForAge,
+      makesSense: review.makesSense,
+      enjoyableForChild: review.enjoyableForChild,
       usesInputsInPlot: review.usesInputsInPlot,
       feelsNatural: review.feelsNatural,
       missingInputs: review.missingInputs,
@@ -214,30 +255,18 @@ async function main() {
   let lastStory = null
 
   for (let attempt = 1; attempt <= MAX_QUALITY_ATTEMPTS; attempt++) {
-    const story = await generateStoryText(inputs, openaiKey, { ...context, revisionFeedback })
+    const story = await generateStoryText(inputs, openaiKey, { ...context, revisionFeedback }, attempt)
     const review = await reviewStory(story, inputs, context, openaiKey)
     lastReview = review
     lastStory = story
     printStory(story, review, attempt)
 
     if (review.passes) {
-      console.log('\n✓ Story passed quality review')
+      console.log('\n✓ Story passed pre-illustration review')
       return
     }
 
-    revisionFeedback = [
-      review.feedback,
-      !review.hasPlot ? 'Add a clearer plot with a beginning, middle, and end.' : '',
-      !review.isFunForAge ? `Make it more fun and age-appropriate for a ${context.childAge}-year-old.` : '',
-      !review.usesInputsInPlot
-        ? `Weave these answers into the plot as events: ${review.missingInputs.join(', ') || inputs.map((i) => i.answer).join(', ')}.`
-        : '',
-      !review.feelsNatural
-        ? 'Rewrite so answers appear naturally in the narrative. Do not quote the original questions or recite answers in a Q&A style.'
-        : '',
-    ]
-      .filter(Boolean)
-      .join(' ')
+    revisionFeedback = buildRevisionFeedback(review, inputs, context, attempt)
 
     console.log(`\n↻ Regenerating (${attempt}/${MAX_QUALITY_ATTEMPTS})…`)
     console.log(`Revision notes: ${revisionFeedback}\n`)

@@ -14,7 +14,7 @@ const ROOT = resolve(__dirname, '..')
 const OUTPUT_DIR = resolve(ROOT, 'practice-output')
 
 const STYLE_PROMPT =
-  "bold and playful children's book illustration, bright vivid colours, cartoon style, clean outlines, friendly characters, flat design, no text, no words"
+  'minimal hand-drawn cartoon illustration, loose sketchy pencil and ink linework, simple shapes, soft muted colors, gentle watercolor wash, uncluttered composition with plenty of empty space, friendly expressive characters, warm children\'s storybook aesthetic, no text, no words, no letters'
 
 const IMAGE_MODEL = process.env.IMAGE_MODEL ?? 'gpt-image-1.5'
 const MAX_RETRIES = 2
