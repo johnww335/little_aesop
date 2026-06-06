@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getStoryWithPages } from '../lib/stories'
 import AppHeader from '../components/AppHeader'
@@ -7,31 +7,47 @@ export default function StoryReader() {
   const { storyId } = useParams()
   const navigate = useNavigate()
   const [story, setStory] = useState(null)
-  const [currentPage, setCurrentPage] = useState(0)
+  const [currentSpread, setCurrentSpread] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [imageLoaded, setImageLoaded] = useState(false)
+  const [loadedImages, setLoadedImages] = useState({})
 
   useEffect(() => {
     loadStory()
   }, [storyId])
 
   useEffect(() => {
-    setImageLoaded(false)
-  }, [currentPage])
+    setLoadedImages({})
+  }, [currentSpread])
 
   const loadStory = async () => {
     setLoading(true)
-    const { data, error } = await getStoryWithPages(storyId)
+    const { data, error: loadError } = await getStoryWithPages(storyId)
     setLoading(false)
-    if (error) { setError(error.message); return }
+    if (loadError) { setError(loadError.message); return }
     setStory(data)
   }
 
-  const handlePrev = () => setCurrentPage(p => Math.max(0, p - 1))
-  const handleNext = () => setCurrentPage(p => Math.min((story?.pages?.length || 1) - 1, p + 1))
+  const pages = story?.pages || []
+  const pageCount = pages.length
+  const spreadCount = Math.max(1, Math.ceil(pageCount / 2))
+  const isFirst = currentSpread === 0
+  const isLast = currentSpread >= spreadCount - 1
 
-  // Keyboard navigation
+  const leftPage = pages[currentSpread * 2]
+  const rightPage = pages[currentSpread * 2 + 1]
+
+  const leftPageNum = currentSpread * 2 + 1
+  const rightPageNum = currentSpread * 2 + 2
+
+  const handlePrev = useCallback(() => {
+    setCurrentSpread(s => Math.max(0, s - 1))
+  }, [])
+
+  const handleNext = useCallback(() => {
+    setCurrentSpread(s => Math.min(spreadCount - 1, s + 1))
+  }, [spreadCount])
+
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'ArrowRight') handleNext()
@@ -39,133 +55,78 @@ export default function StoryReader() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [story, currentPage])
+  }, [handleNext, handlePrev])
+
+  const markImageLoaded = (pageNum) => {
+    setLoadedImages(prev => ({ ...prev, [pageNum]: true }))
+  }
 
   if (loading) {
     return (
-      <Shell title="">
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--ink-muted)' }}>
-          <div style={{ width: 32, height: 32, border: '3px solid var(--border)', borderTopColor: 'var(--gold)', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <ReaderShell title="">
+        <div className="reader-loading">
+          <div className="reader-spinner" />
           Loading your story…
         </div>
-      </Shell>
+      </ReaderShell>
     )
   }
 
   if (error || !story) {
     return (
-      <Shell title="">
+      <ReaderShell title="">
         <div style={{ textAlign: 'center', padding: 40 }}>
           <p style={{ color: 'var(--rose)', marginBottom: 16 }}>Could not load the story.</p>
           <button onClick={() => navigate(-1)} style={{ color: 'var(--gold)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14 }}>Go back</button>
         </div>
-      </Shell>
+      </ReaderShell>
     )
   }
 
-  const pages = story.pages || []
-  const page = pages[currentPage]
-  const isFirst = currentPage === 0
-  const isLast = currentPage === pages.length - 1
+  const progressLabel = rightPage && rightPageNum <= pageCount
+    ? `Pages ${leftPageNum}–${rightPageNum} of ${pageCount}`
+    : `Page ${leftPageNum} of ${pageCount}`
 
   return (
-    <Shell title={story.title} childId={story.child_id}>
-      <div style={{ maxWidth: 680, margin: '0 auto' }}>
-        {/* Page indicator */}
-        <div style={{ textAlign: 'center', marginBottom: 16 }}>
-          <span style={{ fontSize: 13, color: 'var(--ink-muted)' }}>
-            Page {currentPage + 1} of {pages.length}
-          </span>
-        </div>
+    <ReaderShell title={story.title} childId={story.child_id}>
+      <div className="reader-layout">
+        <div className="reader-book-wrap">
+          <div className="reader-book" key={currentSpread}>
+            <BookPagePanel
+              page={leftPage}
+              pageNum={leftPageNum}
+              side="left"
+              loaded={!!loadedImages[leftPageNum]}
+              onImageLoad={() => markImageLoaded(leftPageNum)}
+            />
 
-        {/* Book page */}
-        <div style={{
-          background: 'var(--warm-white)',
-          borderRadius: 'var(--radius-lg)',
-          overflow: 'hidden',
-          boxShadow: 'var(--shadow-lg)',
-          border: '1px solid var(--border)',
-          animation: 'fadeIn 0.3s ease'
-        }}>
-          {/* Illustration */}
-          <div style={{ position: 'relative', paddingTop: '66%', background: 'var(--gold-pale)', overflow: 'hidden' }}>
-            {page?.image_url ? (
-              <>
-                {!imageLoaded && (
-                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ width: 28, height: 28, border: '3px solid var(--border)', borderTopColor: 'var(--gold)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-                  </div>
-                )}
-                <img
-                  src={page.image_url}
-                  alt={`Illustration for page ${currentPage + 1}`}
-                  onLoad={() => setImageLoaded(true)}
-                  style={{
-                    position: 'absolute', inset: 0, width: '100%', height: '100%',
-                    objectFit: 'cover',
-                    opacity: imageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease'
-                  }}
-                />
-              </>
-            ) : (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 56 }}>
-                🎨
-              </div>
-            )}
-          </div>
+            <div className="reader-spine" aria-hidden="true" />
 
-          {/* Text */}
-          <div style={{ padding: '28px 32px 32px' }}>
-            <p style={{
-              fontFamily: 'var(--font-display)',
-              fontSize: 19,
-              lineHeight: 1.75,
-              color: 'var(--ink)',
-              textAlign: 'center',
-              fontStyle: 'italic'
-            }}>
-              {page?.text_content}
-            </p>
+            <BookPagePanel
+              page={rightPage}
+              pageNum={rightPageNum}
+              side="right"
+              loaded={!!loadedImages[rightPageNum]}
+              onImageLoad={() => markImageLoaded(rightPageNum)}
+            />
           </div>
         </div>
 
-        {/* Navigation */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 24, gap: 12 }}>
+        <div className="reader-nav">
           <NavButton onClick={handlePrev} disabled={isFirst} label="← Previous" />
 
-          {/* Page dots */}
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
-            {pages.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setCurrentPage(i)}
-                style={{
-                  width: i === currentPage ? 20 : 8,
-                  height: 8,
-                  borderRadius: 99,
-                  background: i === currentPage ? 'var(--gold)' : 'var(--border-strong)',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  transition: 'width 0.2s, background 0.2s'
-                }}
-                aria-label={`Go to page ${i + 1}`}
+          <div className="reader-progress">
+            <span className="reader-progress-label">{progressLabel}</span>
+            <div className="reader-progress-bar">
+              <div
+                className="reader-progress-fill"
+                style={{ width: `${((currentSpread + 1) / spreadCount) * 100}%` }}
               />
-            ))}
+            </div>
           </div>
 
           {isLast ? (
-            <button
-              onClick={() => navigate(-1)}
-              style={{
-                background: 'var(--gold)', color: 'white', border: 'none',
-                borderRadius: 'var(--radius-sm)', padding: '10px 18px',
-                fontSize: 14, fontWeight: 700, cursor: 'pointer',
-                fontFamily: 'var(--font-body)', whiteSpace: 'nowrap'
-              }}
-            >
+            <button type="button" className="reader-finish" onClick={() => navigate(-1)}>
               Finish 🎉
             </button>
           ) : (
@@ -173,52 +134,378 @@ export default function StoryReader() {
           )}
         </div>
 
-        {/* Keyboard hint */}
-        <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--ink-muted)', marginTop: 16 }}>
-          Use ← → arrow keys to turn pages
-        </p>
+        <p className="reader-hint">Use ← → arrow keys to turn pages</p>
       </div>
 
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
-    </Shell>
+      <style>{READER_STYLES}</style>
+    </ReaderShell>
+  )
+}
+
+function BookPagePanel({ page, pageNum, side, loaded, onImageLoad }) {
+  if (!page) {
+    return (
+      <div className={`reader-page reader-page-${side} reader-page-empty`}>
+        <div className="reader-empty-page" />
+      </div>
+    )
+  }
+
+  return (
+    <div className={`reader-page reader-page-${side}`}>
+      <div className="reader-illustration">
+        {page.image_url ? (
+          <>
+            {!loaded && <div className="reader-spinner reader-spinner-sm" />}
+            <img
+              src={page.image_url}
+              alt={`Illustration for page ${pageNum}`}
+              onLoad={onImageLoad}
+              className={`reader-image${loaded ? ' loaded' : ''}`}
+            />
+          </>
+        ) : (
+          <span className="reader-placeholder">🎨</span>
+        )}
+      </div>
+      <div className="reader-text-wrap">
+        <p className="reader-text">{page.text_content}</p>
+      </div>
+    </div>
   )
 }
 
 function NavButton({ onClick, disabled, label }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        background: 'var(--warm-white)',
-        border: '1.5px solid var(--border-strong)',
-        borderRadius: 'var(--radius-sm)',
-        padding: '10px 18px',
-        fontSize: 14,
-        fontWeight: 600,
-        color: disabled ? 'var(--ink-muted)' : 'var(--ink)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.4 : 1,
-        fontFamily: 'var(--font-body)',
-        whiteSpace: 'nowrap',
-        transition: 'opacity 0.15s'
-      }}
-    >
+    <button type="button" onClick={onClick} disabled={disabled} className="reader-nav-btn">
       {label}
     </button>
   )
 }
 
-function Shell({ children, title, childId }) {
+function ReaderShell({ children, title, childId }) {
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--cream)' }}>
+    <div className="reader-shell">
       <AppHeader title={title} childId={childId} />
-      <main style={{ padding: '32px 20px 60px' }}>
-        {children}
-      </main>
+      <main className="reader-main">{children}</main>
     </div>
   )
 }
+
+const READER_STYLES = `
+  .reader-shell {
+    min-height: 100vh;
+    background: var(--cream);
+    background-image:
+      radial-gradient(ellipse at 15% 80%, rgba(45,90,61,0.05) 0%, transparent 55%),
+      radial-gradient(ellipse at 85% 20%, rgba(200,136,42,0.06) 0%, transparent 50%);
+  }
+
+  .reader-main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 64px);
+    padding: 16px 20px 28px;
+  }
+
+  .reader-layout {
+    width: 100%;
+    max-width: 1180px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    flex: 1;
+  }
+
+  .reader-book-wrap {
+    width: 100%;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+
+  .reader-book {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    height: min(72vh, 640px);
+    min-height: 420px;
+    border-radius: 6px 10px 10px 6px;
+    box-shadow:
+      0 28px 70px rgba(44,26,14,0.16),
+      0 10px 24px rgba(44,26,14,0.08),
+      inset 0 0 0 1px rgba(44,26,14,0.07);
+    animation: bookOpen 0.35s ease;
+    overflow: hidden;
+  }
+
+  @keyframes bookOpen {
+    from { opacity: 0; transform: scale(0.98); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .reader-page {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .reader-page-left {
+    background: linear-gradient(135deg, #f7f0e4 0%, #faf6ef 100%);
+    border-radius: 4px 0 0 4px;
+  }
+
+  .reader-page-right {
+    background: linear-gradient(225deg, #fffdf8 0%, #faf7f0 100%);
+    border-radius: 0 4px 4px 0;
+  }
+
+  .reader-page-empty {
+    background: linear-gradient(225deg, #fffdf8 0%, #faf7f0 100%);
+  }
+
+  .reader-empty-page {
+    flex: 1;
+    background: linear-gradient(225deg, #fffdf8 0%, #faf7f0 100%);
+  }
+
+  .reader-spine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 18px;
+    z-index: 2;
+    pointer-events: none;
+    background: linear-gradient(
+      to right,
+      rgba(44,26,14,0.14) 0%,
+      rgba(44,26,14,0.06) 25%,
+      rgba(255,252,245,0.5) 50%,
+      rgba(44,26,14,0.06) 75%,
+      rgba(44,26,14,0.14) 100%
+    );
+    box-shadow:
+      inset 2px 0 6px rgba(44,26,14,0.08),
+      inset -2px 0 6px rgba(44,26,14,0.08);
+  }
+
+  .reader-illustration {
+    flex: 1 1 0;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 12px 6px;
+    min-height: 0;
+  }
+
+  .reader-page-left .reader-illustration {
+    padding-left: 18px;
+    padding-right: 10px;
+  }
+
+  .reader-page-right .reader-illustration {
+    padding-left: 10px;
+    padding-right: 18px;
+  }
+
+  .reader-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity 0.35s ease;
+  }
+
+  .reader-image.loaded {
+    opacity: 1;
+  }
+
+  .reader-placeholder {
+    font-size: 48px;
+    opacity: 0.5;
+  }
+
+  .reader-text-wrap {
+    flex: 0 0 auto;
+    max-height: 18%;
+    min-height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 14px 12px;
+    border-top: 1px solid rgba(44,26,14,0.07);
+    overflow: hidden;
+  }
+
+  .reader-page-left .reader-text-wrap {
+    padding-left: 18px;
+    padding-right: 10px;
+  }
+
+  .reader-page-right .reader-text-wrap {
+    padding-left: 10px;
+    padding-right: 18px;
+  }
+
+  .reader-text {
+    font-family: var(--font-display);
+    font-size: clamp(13px, 1.35vw, 15px);
+    line-height: 1.5;
+    color: var(--ink);
+    margin: 0;
+    text-align: center;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .reader-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+    max-width: 680px;
+  }
+
+  .reader-nav-btn {
+    background: var(--warm-white);
+    border: 1.5px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+    font-family: var(--font-body);
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+
+  .reader-nav-btn:disabled {
+    color: var(--ink-muted);
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  .reader-progress {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .reader-progress-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+  }
+
+  .reader-progress-bar {
+    width: 100%;
+    max-width: 200px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+
+  .reader-progress-fill {
+    height: 100%;
+    background: var(--gold);
+    border-radius: 99px;
+    transition: width 0.3s ease;
+  }
+
+  .reader-finish {
+    background: var(--gold);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: var(--font-body);
+    white-space: nowrap;
+  }
+
+  .reader-hint {
+    font-size: 12px;
+    color: var(--ink-muted);
+    margin: 0;
+  }
+
+  .reader-loading {
+    text-align: center;
+    padding: 60px;
+    color: var(--ink-muted);
+  }
+
+  .reader-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: readerSpin 0.7s linear infinite;
+    margin: 0 auto 12px;
+  }
+
+  .reader-spinner-sm {
+    width: 24px;
+    height: 24px;
+    position: absolute;
+  }
+
+  @keyframes readerSpin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (max-width: 720px) {
+    .reader-book {
+      height: min(68vh, 560px);
+      min-height: 360px;
+    }
+
+    .reader-illustration {
+      padding: 8px 10px 4px;
+    }
+
+    .reader-text-wrap {
+      max-height: 22%;
+      min-height: 64px;
+      padding: 6px 10px 10px;
+    }
+
+    .reader-text {
+      font-size: 12px;
+      line-height: 1.45;
+      -webkit-line-clamp: 3;
+    }
+
+    .reader-nav {
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .reader-progress {
+      order: -1;
+      width: 100%;
+    }
+  }
+`

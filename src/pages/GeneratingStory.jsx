@@ -52,8 +52,8 @@ export default function GeneratingStory() {
     log('GeneratingStory', 'Watching story generation', { storyId })
 
     const deployInfo = getStoredDeployInfo(storyId)
-    if (deployInfo && deployInfo.functionVersion !== '2025-06-13') {
-      setDeployWarning(`Deployed edge function is ${deployInfo.functionVersion ?? 'outdated'} — deploy generate-story (2025-06-13) for GPT Image support.`)
+    if (deployInfo && deployInfo.functionVersion !== '2025-06-15') {
+      setDeployWarning(`Deployed edge function is ${deployInfo.functionVersion ?? 'outdated'} — deploy generate-story (2025-06-15) for GPT Image support.`)
     }
     if (deployInfo?.hasOpenAiKey === false) {
       setDeployWarning('OPENAI_API_KEY is not set on the edge function.')

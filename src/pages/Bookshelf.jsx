@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { getStoriesForChild, STORY_PAGE_COUNT } from '../lib/stories'
+import { getStoriesForChild, deleteStory, STORY_PAGE_COUNT } from '../lib/stories'
 import { getChildren, getAvatarEmoji } from '../lib/children'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
@@ -14,6 +14,8 @@ export default function Bookshelf() {
   const [child, setChild] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [storyToDelete, setStoryToDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -45,6 +47,20 @@ export default function Bookshelf() {
   const getCoverImage = (story) => {
     const firstPage = story.pages?.find(p => p.page_number === 1)
     return firstPage?.image_url || null
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!storyToDelete) return
+    setDeleting(true)
+    setError('')
+    const { error: deleteError } = await deleteStory(storyToDelete.id)
+    setDeleting(false)
+    if (deleteError) {
+      setError(deleteError.message)
+      return
+    }
+    setStories(prev => prev.filter(s => s.id !== storyToDelete.id))
+    setStoryToDelete(null)
   }
 
   return (
@@ -94,34 +110,57 @@ export default function Bookshelf() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 20 }}>
             {stories.map(story => (
-              <StoryCard key={story.id} story={story} coverImage={getCoverImage(story)} />
+              <StoryCard
+                key={story.id}
+                story={story}
+                coverImage={getCoverImage(story)}
+                onDelete={() => setStoryToDelete(story)}
+              />
             ))}
           </div>
         )}
       </main>
+
+      {storyToDelete && (
+        <DeleteStoryModal
+          story={storyToDelete}
+          loading={deleting}
+          onCancel={() => !deleting && setStoryToDelete(null)}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
 
-function StoryCard({ story, coverImage }) {
+function StoryCard({ story, coverImage, onDelete }) {
   const navigate = useNavigate()
   const date = new Date(story.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   const inProgress = story.status === 'pending' || story.status === 'generating'
+  const failed = story.status === 'error'
   const pagesCompleted = Math.max(story.pages_completed ?? 0, story.pages?.length ?? 0)
   const progressPct = Math.round((pagesCompleted / STORY_PAGE_COUNT) * 100)
 
-  const statusLabel = inProgress
-    ? pagesCompleted > 0
-      ? `Painting ${pagesCompleted}/${STORY_PAGE_COUNT}`
-      : story.title
-        ? 'Writing story…'
-        : 'Starting…'
-    : null
+  const statusLabel = failed
+    ? 'Failed to create'
+    : inProgress
+      ? pagesCompleted > 0
+        ? `Painting ${pagesCompleted}/${STORY_PAGE_COUNT}`
+        : story.title
+          ? 'Writing story…'
+          : 'Starting…'
+      : null
 
   const handleClick = () => {
+    if (failed) return
     navigate(inProgress ? `/story/${story.id}/generating` : `/story/${story.id}/read`)
+  }
+
+  const handleDeleteClick = (e) => {
+    e.stopPropagation()
+    onDelete()
   }
 
   return (
@@ -129,17 +168,60 @@ function StoryCard({ story, coverImage }) {
       onClick={handleClick}
       style={{
         background: 'var(--warm-white)',
-        border: `1px solid ${inProgress ? 'rgba(200,136,42,0.35)' : 'var(--border)'}`,
+        border: `1px solid ${failed ? 'rgba(192,83,74,0.35)' : inProgress ? 'rgba(200,136,42,0.35)' : 'var(--border)'}`,
         borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
-        cursor: 'pointer',
+        cursor: failed ? 'default' : 'pointer',
         boxShadow: 'var(--shadow-sm)',
         transition: 'box-shadow 0.15s, transform 0.15s',
-        opacity: inProgress ? 0.92 : 1,
+        opacity: inProgress || failed ? 0.92 : 1,
+        position: 'relative',
       }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--shadow-md)'; e.currentTarget.style.transform = 'translateY(-3px)' }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; e.currentTarget.style.transform = 'translateY(0)' }}
+      onMouseEnter={e => {
+        if (failed) return
+        e.currentTarget.style.boxShadow = 'var(--shadow-md)'
+        e.currentTarget.style.transform = 'translateY(-3px)'
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.boxShadow = 'var(--shadow-sm)'
+        e.currentTarget.style.transform = 'translateY(0)'
+      }}
     >
+      <button
+        type="button"
+        onClick={handleDeleteClick}
+        aria-label={`Delete ${story.title || 'story'}`}
+        title="Delete story"
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          zIndex: 2,
+          width: 32,
+          height: 32,
+          borderRadius: '50%',
+          border: '1px solid rgba(44,26,14,0.08)',
+          background: 'rgba(255,252,245,0.92)',
+          color: 'var(--ink-muted)',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 14,
+          lineHeight: 1,
+          boxShadow: 'var(--shadow-sm)',
+        }}
+        onMouseEnter={e => {
+          e.currentTarget.style.color = 'var(--rose)'
+          e.currentTarget.style.borderColor = 'rgba(192,83,74,0.25)'
+        }}
+        onMouseLeave={e => {
+          e.currentTarget.style.color = 'var(--ink-muted)'
+          e.currentTarget.style.borderColor = 'rgba(44,26,14,0.08)'
+        }}
+      >
+        🗑
+      </button>
       {/* Cover image */}
       <div style={{ height: 180, background: 'var(--gold-pale)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         {coverImage ? (
@@ -170,22 +252,73 @@ function StoryCard({ story, coverImage }) {
         <p style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 15, color: 'var(--ink)', marginBottom: 4, lineHeight: 1.3 }}>
           {story.title || (inProgress ? 'New story' : 'Untitled Story')}
         </p>
-        {inProgress ? (
+        {inProgress || failed ? (
           <>
-            <p style={{ fontSize: 12, color: 'var(--gold)', fontWeight: 600, marginBottom: 6 }}>{statusLabel}</p>
-            <div style={{ height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%',
-                width: `${progressPct}%`,
-                background: 'var(--gold)',
-                borderRadius: 99,
-                transition: 'width 0.5s ease',
-              }} />
-            </div>
+            <p style={{
+              fontSize: 12,
+              color: failed ? 'var(--rose)' : 'var(--gold)',
+              fontWeight: 600,
+              marginBottom: 6,
+            }}>
+              {statusLabel}
+            </p>
+            {inProgress && (
+              <div style={{ height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${progressPct}%`,
+                  background: 'var(--gold)',
+                  borderRadius: 99,
+                  transition: 'width 0.5s ease',
+                }} />
+              </div>
+            )}
           </>
         ) : (
           <p style={{ fontSize: 12, color: 'var(--ink-muted)' }}>{date}</p>
         )}
+      </div>
+    </div>
+  )
+}
+
+function DeleteStoryModal({ story, loading, onCancel, onConfirm }) {
+  const title = story.title || 'Untitled Story'
+
+  return (
+    <div
+      onClick={e => e.target === e.currentTarget && !loading && onCancel()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(44,26,14,0.35)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+        backdropFilter: 'blur(2px)',
+      }}
+    >
+      <div style={{
+        background: 'var(--warm-white)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '28px 24px',
+        width: '100%',
+        maxWidth: 400,
+        boxShadow: 'var(--shadow-lg)',
+        border: '1px solid var(--border)',
+      }}>
+        <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 600, color: 'var(--ink)', marginBottom: 10 }}>
+          Delete this story?
+        </h2>
+        <p style={{ fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6, marginBottom: 24 }}>
+          This will permanently remove <strong>{title}</strong> and all of its pages. This cannot be undone.
+        </p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Button variant="secondary" onClick={onCancel} disabled={loading} style={{ flex: 1 }}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={onConfirm} loading={loading} style={{ flex: 1 }}>
+            Delete story
+          </Button>
+        </div>
       </div>
     </div>
   )
