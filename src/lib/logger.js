@@ -58,6 +58,54 @@ export function looksLikeTemplateStory(pages) {
   return hits >= 2
 }
 
+/** Log story architecture metadata (characters, plot, critic feedback). */
+export function logStoryMetadata(storyId, metadata) {
+  if (!metadata) return
+  const { characters, plotSummary, criticFeedback, plotPoints, paletteNotes } = metadata
+
+  console.log(`${PREFIX} [Story] ========== STORY METADATA ==========`)
+  console.log(`${PREFIX} [Story] Story ID:`, storyId)
+  console.log(`${PREFIX} [Story] Plot:`, plotSummary)
+  console.log(`${PREFIX} [Story] Palette:`, paletteNotes)
+
+  const userInputs = metadata.userInputs ?? metadata.sourceInputs
+  if (userInputs?.length) {
+    console.log(`${PREFIX} [Story] User inputs:`)
+    userInputs.forEach((i) => {
+      console.log(`  • "${i.answer}" (${i.question})`)
+    })
+  }
+
+  if (metadata.illustrationPageLimit != null) {
+    console.log(`${PREFIX} [Story] Illustration target:`, `${metadata.illustrationPageLimit} pages`)
+  }
+
+  if (characters?.length) {
+    console.log(`${PREFIX} [Story] Characters:`)
+    characters.forEach((c) => {
+      console.log(`  • ${c.name} (${c.role}) — introduced page ${c.introducedOnPage}`)
+      console.log(`    ${c.appearance}`)
+    })
+  }
+
+  if (criticFeedback) {
+    console.log(`${PREFIX} [Story] Critic rating:`, `${criticFeedback.rating}/100`)
+    console.log(`${PREFIX} [Story] Inputs fit naturally:`, criticFeedback.inputsFitNaturally)
+    console.log(`${PREFIX} [Story] Faults:`, criticFeedback.faults)
+    console.log(`${PREFIX} [Story] Improvements:`, criticFeedback.improvements)
+  }
+
+  if (plotPoints?.length) {
+    console.log(`${PREFIX} [Story] Plot points & input introductions:`)
+    plotPoints.forEach((p) => {
+      const label = p.type === 'user_input' ? `user input "${p.userInput}"` : 'plot'
+      console.log(`  • Page ${p.page} (${label}): ${p.description}`)
+    })
+  }
+
+  console.log(`${PREFIX} [Story] ====================================`)
+}
+
 /** TEMP: remove before production — dumps full story text for manual QA */
 export function logStoryText(storyId, { title, pages, meta }) {
   console.log(`${PREFIX} [Debug] ========== FULL STORY TEXT ==========`)

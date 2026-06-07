@@ -7,7 +7,7 @@ import {
   getStoredDeployInfo,
   inferGenerationErrorHint,
 } from '../lib/stories'
-import { log, warn, error as logError, logStoryText, looksLikeTemplateStory, logImageDiagnostics } from '../lib/logger'
+import { log, warn, error as logError, logStoryText, logStoryMetadata, looksLikeTemplateStory, logImageDiagnostics } from '../lib/logger'
 import AppHeader from '../components/AppHeader'
 
 const POLL_INTERVAL = 5000
@@ -44,16 +44,18 @@ export default function GeneratingStory() {
   const lastStatusRef = useRef(null)
   const pollCountRef = useRef(0)
   const startedRef = useRef(Date.now())
+  const metadataLoggedRef = useRef(false)
 
   useEffect(() => {
     lastStatusRef.current = null
     pollCountRef.current = 0
+    metadataLoggedRef.current = false
     startedRef.current = Date.now()
     log('GeneratingStory', 'Watching story generation', { storyId })
 
     const deployInfo = getStoredDeployInfo(storyId)
-    if (deployInfo && deployInfo.functionVersion !== '2025-06-15') {
-      setDeployWarning(`Deployed edge function is ${deployInfo.functionVersion ?? 'outdated'} — deploy generate-story (2025-06-15) for GPT Image support.`)
+    if (deployInfo && deployInfo.functionVersion !== '2025-06-17') {
+      setDeployWarning(`Deployed edge function is ${deployInfo.functionVersion ?? 'outdated'} — deploy generate-story (2025-06-17) for GPT Image support.`)
     }
     if (deployInfo?.hasOpenAiKey === false) {
       setDeployWarning('OPENAI_API_KEY is not set on the edge function.')
@@ -73,6 +75,11 @@ export default function GeneratingStory() {
       setElapsedMin(Math.floor((Date.now() - startedRef.current) / 60000))
       if (data.title) setStoryTitle(data.title)
       if (data.childId) setChildId(data.childId)
+
+      if (data.storyMetadata && !metadataLoggedRef.current) {
+        metadataLoggedRef.current = true
+        logStoryMetadata(storyId, data.storyMetadata)
+      }
 
       if (data.status === 'pending') {
         setPhase('starting')
@@ -256,7 +263,7 @@ export default function GeneratingStory() {
         </div>
 
         <p style={{ fontSize: 13, color: 'var(--ink-muted)', marginBottom: 16 }}>
-          This usually takes 10–25 minutes with illustrations. You can leave this page and come back!
+          Illustrations are created in batches of 5 (about 15–25 min for a full book). You can leave and come back!
         </p>
 
         {deployWarning && (
