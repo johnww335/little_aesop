@@ -1,35 +1,76 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getStoryWithPages } from '../lib/stories'
+import {
+  getStoryWithPages,
+  illustrateNextBatch,
+  isDevAdmin,
+  countPlaceholderPages,
+  ILLUSTRATION_BATCH_SIZE,
+} from '../lib/stories'
+import { useAuth } from '../contexts/AuthContext'
 import AppHeader from '../components/AppHeader'
 
 export default function StoryReader() {
   const { storyId } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [story, setStory] = useState(null)
   const [currentSpread, setCurrentSpread] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [loadedImages, setLoadedImages] = useState({})
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [batchError, setBatchError] = useState('')
+  const [fullscreen, setFullscreen] = useState(false)
+
+  const exitFullscreen = useCallback(() => setFullscreen(false), [])
+  const toggleFullscreen = useCallback(() => setFullscreen(f => !f), [])
+
+  const loadStory = async ({ showLoading = false } = {}) => {
+    if (showLoading) setLoading(true)
+    const { data, error: loadError } = await getStoryWithPages(storyId)
+    if (showLoading) setLoading(false)
+    if (loadError) {
+      setError(loadError.message)
+      return
+    }
+    setStory(data)
+    if (data.status === 'ready') setBatchRunning(false)
+    if (data.status === 'error') {
+      setBatchRunning(false)
+      setBatchError('Illustration batch failed — check edge function logs.')
+    }
+  }
 
   useEffect(() => {
-    loadStory()
+    loadStory({ showLoading: true })
   }, [storyId])
+
+  useEffect(() => {
+    if (!batchRunning) return undefined
+    const interval = setInterval(() => loadStory(), 5000)
+    return () => clearInterval(interval)
+  }, [batchRunning, storyId])
 
   useEffect(() => {
     setLoadedImages({})
   }, [currentSpread])
 
-  const loadStory = async () => {
-    setLoading(true)
-    const { data, error: loadError } = await getStoryWithPages(storyId)
-    setLoading(false)
-    if (loadError) { setError(loadError.message); return }
-    setStory(data)
-  }
-
   const pages = story?.pages || []
   const pageCount = pages.length
+  const placeholderCount = countPlaceholderPages(pages)
+  const showDevButton = isDevAdmin(user) && placeholderCount > 0
+  const illustrating = batchRunning || story?.status === 'generating'
+
+  const handleIllustrateNext = async () => {
+    setBatchError('')
+    setBatchRunning(true)
+    const { error: batchErr } = await illustrateNextBatch(storyId)
+    if (batchErr) {
+      setBatchError(batchErr.message)
+      setBatchRunning(false)
+    }
+  }
   const spreadCount = Math.max(1, Math.ceil(pageCount / 2))
   const isFirst = currentSpread === 0
   const isLast = currentSpread >= spreadCount - 1
@@ -50,12 +91,25 @@ export default function StoryReader() {
 
   useEffect(() => {
     const handler = (e) => {
+      if (e.key === 'Escape' && fullscreen) {
+        exitFullscreen()
+        return
+      }
       if (e.key === 'ArrowRight') handleNext()
       if (e.key === 'ArrowLeft') handlePrev()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [handleNext, handlePrev])
+  }, [handleNext, handlePrev, fullscreen, exitFullscreen])
+
+  useEffect(() => {
+    if (!fullscreen) return undefined
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prevOverflow
+    }
+  }, [fullscreen])
 
   const markImageLoaded = (pageNum) => {
     setLoadedImages(prev => ({ ...prev, [pageNum]: true }))
@@ -88,7 +142,12 @@ export default function StoryReader() {
     : `Page ${leftPageNum} of ${pageCount}`
 
   return (
-    <ReaderShell title={story.title} childId={story.child_id}>
+    <ReaderShell
+      title={story.title}
+      childId={story.child_id}
+      fullscreen={fullscreen}
+      onExitFullscreen={exitFullscreen}
+    >
       <div className="reader-layout">
         <div className="reader-book-wrap">
           <div className="reader-book" key={currentSpread}>
@@ -125,6 +184,15 @@ export default function StoryReader() {
             </div>
           </div>
 
+          <button
+            type="button"
+            className="reader-fullscreen-btn"
+            onClick={toggleFullscreen}
+            aria-pressed={fullscreen}
+          >
+            {fullscreen ? 'Exit full screen' : 'Full screen'}
+          </button>
+
           {isLast ? (
             <button type="button" className="reader-finish" onClick={() => navigate(-1)}>
               Finish 🎉
@@ -134,7 +202,26 @@ export default function StoryReader() {
           )}
         </div>
 
-        <p className="reader-hint">Use ← → arrow keys to turn pages</p>
+        <p className="reader-hint">
+          {fullscreen ? 'Press Esc to exit full screen · ' : ''}
+          Use ← → arrow keys to turn pages
+        </p>
+
+        {showDevButton && (
+          <div className="reader-dev-bar">
+            <button
+              type="button"
+              className="reader-dev-btn"
+              onClick={handleIllustrateNext}
+              disabled={illustrating}
+            >
+              {illustrating
+                ? `Generating next ${ILLUSTRATION_BATCH_SIZE} images…`
+                : `Generate next ${ILLUSTRATION_BATCH_SIZE} images (${placeholderCount} placeholders left)`}
+            </button>
+            {batchError && <p className="reader-dev-error">{batchError}</p>}
+          </div>
+        )}
       </div>
 
       <style>{READER_STYLES}</style>
@@ -183,10 +270,20 @@ function NavButton({ onClick, disabled, label }) {
   )
 }
 
-function ReaderShell({ children, title, childId }) {
+function ReaderShell({ children, title, childId, fullscreen = false, onExitFullscreen }) {
   return (
-    <div className="reader-shell">
-      <AppHeader title={title} childId={childId} />
+    <div className={`reader-shell${fullscreen ? ' reader-shell--fullscreen' : ''}`}>
+      {!fullscreen && <AppHeader title={title} childId={childId} />}
+      {fullscreen && (
+        <button
+          type="button"
+          className="reader-exit-fullscreen"
+          onClick={onExitFullscreen}
+          aria-label="Exit full screen"
+        >
+          ✕ Exit
+        </button>
+      )}
       <main className="reader-main">{children}</main>
     </div>
   )
@@ -199,6 +296,65 @@ const READER_STYLES = `
     background-image:
       radial-gradient(ellipse at 15% 80%, rgba(45,90,61,0.05) 0%, transparent 55%),
       radial-gradient(ellipse at 85% 20%, rgba(200,136,42,0.06) 0%, transparent 50%);
+  }
+
+  .reader-shell--fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .reader-shell--fullscreen .reader-main {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 12px 20px 20px;
+  }
+
+  .reader-shell--fullscreen .reader-book {
+    height: min(calc(100vh - 140px), calc(100dvh - 140px), 820px);
+    max-height: none;
+  }
+
+  .reader-shell--fullscreen .reader-layout {
+    max-width: none;
+    height: 100%;
+    justify-content: center;
+  }
+
+  .reader-exit-fullscreen {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    z-index: 1001;
+    background: rgba(255, 252, 245, 0.95);
+    border: 1.5px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+    font-family: var(--font-body);
+    box-shadow: 0 4px 16px rgba(44, 26, 14, 0.12);
+  }
+
+  .reader-exit-fullscreen:hover {
+    background: var(--warm-white);
+  }
+
+  .reader-fullscreen-btn {
+    background: var(--warm-white);
+    border: 1.5px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-family: var(--font-body);
+    white-space: nowrap;
   }
 
   .reader-main {
@@ -450,6 +606,38 @@ const READER_STYLES = `
     margin: 0;
   }
 
+  .reader-dev-bar {
+    margin-top: 20px;
+    padding: 12px 16px;
+    background: rgba(44, 26, 14, 0.06);
+    border: 1px dashed rgba(200, 136, 42, 0.45);
+    border-radius: var(--radius-sm);
+    text-align: center;
+  }
+
+  .reader-dev-btn {
+    background: var(--gold-pale);
+    border: 1px solid rgba(200, 136, 42, 0.35);
+    border-radius: var(--radius-sm);
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-family: var(--font-body);
+  }
+
+  .reader-dev-btn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+
+  .reader-dev-error {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--rose);
+  }
+
   .reader-loading {
     text-align: center;
     padding: 60px;
@@ -501,6 +689,10 @@ const READER_STYLES = `
     .reader-nav {
       flex-wrap: wrap;
       justify-content: center;
+    }
+
+    .reader-fullscreen-btn {
+      order: 2;
     }
 
     .reader-progress {

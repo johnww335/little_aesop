@@ -1,8 +1,9 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const LOG = "[generate-story]";
-const FUNCTION_VERSION = "2025-06-15";
+const FUNCTION_VERSION = "2025-06-17";
+const IMAGE_BATCH_SIZE = 5;
 
 function log(stage: string, message: string, data?: Record<string, unknown>) {
   if (data) console.log(`${LOG} [${stage}] ${message}`, data);
@@ -56,11 +57,37 @@ type StoryMeta = {
   reviewFeedback?: string;
 };
 
-type VisualBible = {
-  protagonistName: string;
-  protagonistAppearance: string;
-  otherCharacters: string;
+type StoryCharacter = {
+  name: string;
+  role: string;
+  introducedOnPage: number;
+  appearance: string;
+};
+
+type StoryPlotPoint = {
+  page: number;
+  description: string;
+  type: "plot" | "user_input";
+  userInput?: string;
+};
+
+type CriticFeedback = {
+  rating: number;
+  faults: string;
+  improvements: string;
+  inputsFitNaturally: "items_make_sense" | "items_feel_out_of_place";
+};
+
+type UserInput = { question: string; answer: string };
+
+type StoryMetadata = {
+  characters: StoryCharacter[];
+  plotSummary: string;
+  criticFeedback: CriticFeedback;
+  plotPoints: StoryPlotPoint[];
   paletteNotes: string;
+  userInputs: UserInput[];
+  illustrationPageLimit?: number;
 };
 
 function calculateAge(birthday: string): number {
@@ -178,6 +205,53 @@ function placeholderImage(pageNumber: number): string {
   return `https://placehold.co/1024x1024/E8D5A3/2C1A0E/png?text=Page+${pageNumber}`;
 }
 
+function isPlaceholderImage(url: string | null | undefined): boolean {
+  return !url || url.includes("placehold.co");
+}
+
+async function assertDevAdmin(
+  req: Request,
+  supabaseUrl: string,
+): Promise<void> {
+  const adminEmail = Deno.env.get("DEV_ADMIN_EMAIL");
+  if (!adminEmail) {
+    throw new Error("Manual illustration is not configured (DEV_ADMIN_EMAIL)");
+  }
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new Error("Unauthorized");
+  }
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!anonKey) throw new Error("Missing SUPABASE_ANON_KEY");
+
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: { user }, error } = await userClient.auth.getUser();
+  if (error || !user?.email) throw new Error("Unauthorized");
+  if (user.email.toLowerCase() !== adminEmail.toLowerCase()) {
+    throw new Error("Forbidden");
+  }
+}
+
+async function findNextPlaceholderStart(
+  supabase: ReturnType<typeof createClient>,
+  storyId: string,
+): Promise<number | null> {
+  const { data: pages, error } = await supabase
+    .from("pages")
+    .select("page_number, image_url")
+    .eq("story_id", storyId)
+    .order("page_number");
+
+  if (error || !pages?.length) return null;
+
+  for (const page of pages) {
+    if (isPlaceholderImage(page.image_url)) return page.page_number;
+  }
+  return null;
+}
+
 function base64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -214,14 +288,45 @@ function buildScenePrompt(pageText: string): string {
   return cleaned.length > 400 ? `${cleaned.slice(0, 397)}…` : cleaned;
 }
 
-async function buildVisualBible(
+function formatInputsForMetadata(inputs: StoryInput[]): string {
+  return inputs
+    .map((i, n) => `${n + 1}. answer: "${i.answer}" (prompt: ${i.question})`)
+    .join("\n");
+}
+
+function normalizeInputToken(value: string): string {
+  return value.toLowerCase().trim();
+}
+
+function sanitizeStoryMetadata(metadata: StoryMetadata, inputs: StoryInput[]): StoryMetadata {
+  const allowedAnswers = new Set(inputs.map(i => normalizeInputToken(i.answer)));
+
+  metadata.plotPoints = (metadata.plotPoints ?? []).filter((p) => {
+    if (p.type !== "user_input") return true;
+    if (!p.userInput) return false;
+    const ok = allowedAnswers.has(normalizeInputToken(p.userInput));
+    if (!ok) {
+      log("Metadata", "Removed hallucinated user_input from plotPoints", { userInput: p.userInput });
+    }
+    return ok;
+  });
+
+  metadata.userInputs = inputs.map(i => ({ question: i.question, answer: i.answer }));
+  return metadata;
+}
+
+async function buildStoryMetadata(
   story: StoryDraft,
+  inputs: StoryInput[],
   context: StoryContext,
   openaiKey: string,
-): Promise<VisualBible> {
+): Promise<StoryMetadata> {
   const storyText = story.pages.map((page, i) => `Page ${i + 1}: ${page}`).join("\n");
+  const inputsBlock = formatInputsForMetadata(inputs);
 
-  log("Images", "Building visual character bible for consistent illustrations");
+  log("Metadata", "Building story architecture and critic feedback", {
+    inputAnswers: inputs.map(i => i.answer),
+  });
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -231,26 +336,48 @@ async function buildVisualBible(
     },
     body: JSON.stringify({
       model: "gpt-4o",
-      max_tokens: 600,
+      max_tokens: 1500,
       messages: [
         {
           role: "system",
-          content: `You are an art director for a children's picture book starring ${context.childName} (age ${context.childAge}).
-Read the story and define FIXED visual descriptions that every illustration must use so characters look identical on every page.
+          content: `You are a professional children's book critic and art director analyzing a story for ${context.childName}, age ${context.childAge}.
 
-Return ONLY JSON:
+Return ONLY JSON with this exact structure:
 {
-  "protagonistName": "main character name",
-  "protagonistAppearance": "Detailed fixed visual design: age, hair (style/color), face shape, eye color, skin tone, outfit (exact colors and items), proportions, distinguishing features. Be specific enough that an illustrator could draw them consistently.",
-  "otherCharacters": "Fixed visual descriptions of any recurring side characters (or empty string if none)",
-  "paletteNotes": "3-5 dominant colors and overall art mood for the book"
+  "characters": [
+    {
+      "name": "character name",
+      "role": "protagonist | sidekick | etc",
+      "introducedOnPage": 1,
+      "appearance": "Fixed visual design for illustrations"
+    }
+  ],
+  "plotSummary": "1-2 sentence summary of the full story arc",
+  "criticFeedback": {
+    "rating": 85,
+    "faults": "Short paragraph on weaknesses",
+    "improvements": "Simple actionable improvements",
+    "inputsFitNaturally": "items_make_sense"
+  },
+  "plotPoints": [
+    { "page": 1, "description": "Setup beat", "type": "plot" },
+    { "page": 8, "description": "How a specific child answer enters the plot", "type": "user_input", "userInput": "exact answer text from the list below" }
+  ],
+  "paletteNotes": "3-5 dominant colors and art mood"
 }
 
-The protagonist should feel like a ${context.childAge}-year-old child when appropriate. Keep outfits simple and consistent across all pages.`,
+Rules:
+- List ALL characters with the exact page they first appear (introducedOnPage)
+- plotPoints must include major plot beats AND one user_input entry per child answer listed below
+- For user_input plotPoints, userInput MUST be copied exactly from the child answers list — never invent answers
+- Each plotPoint page must be the FIRST page where that beat, activity, or concept appears in the story text
+- Plot beats that introduce a new activity (e.g. doing dishes, visiting a place) must have the page where that activity first happens
+- criticFeedback.rating is 0-100 for a ${context.childAge}-year-old
+- inputsFitNaturally must be exactly "items_make_sense" or "items_feel_out_of_place"`,
         },
         {
           role: "user",
-          content: `Title: ${story.title}\n\n${storyText}`,
+          content: `Child answers (ONLY these may be used as userInput values):\n${inputsBlock}\n\nTitle: ${story.title}\n\n${storyText}`,
         },
       ],
       response_format: { type: "json_object" },
@@ -259,54 +386,231 @@ The protagonist should feel like a ${context.childAge}-year-old child when appro
 
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data?.error?.message || `Visual bible API error (${response.status})`);
+    throw new Error(data?.error?.message || `Story metadata API error (${response.status})`);
   }
 
   const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("Visual bible returned no content");
+  if (!content) throw new Error("Story metadata returned no content");
 
-  const bible = JSON.parse(content) as VisualBible;
-  log("Images", "Visual bible ready", {
-    protagonistName: bible.protagonistName,
-    appearanceLength: bible.protagonistAppearance?.length ?? 0,
+  let metadata = JSON.parse(content) as StoryMetadata;
+  metadata.characters = metadata.characters ?? [];
+  metadata.plotPoints = metadata.plotPoints ?? [];
+  metadata.criticFeedback = metadata.criticFeedback ?? {
+    rating: 0, faults: "", improvements: "", inputsFitNaturally: "items_feel_out_of_place",
+  };
+  metadata.criticFeedback.rating = Math.min(100, Math.max(0, Math.round(metadata.criticFeedback.rating ?? 0)));
+  metadata = sanitizeStoryMetadata(metadata, inputs);
+  metadata = alignUserInputPagesToStory(story, metadata);
+
+  log("Metadata", "Story metadata ready", {
+    characterCount: metadata.characters.length,
+    plotPointCount: metadata.plotPoints.length,
+    userInputPlotPoints: metadata.plotPoints.filter(p => p.type === "user_input").length,
+    criticRating: metadata.criticFeedback.rating,
+    inputsFit: metadata.criticFeedback.inputsFitNaturally,
   });
-  return bible;
+  return metadata;
 }
 
-function buildAnchorImagePrompt(visualBible: VisualBible, pageText: string): string {
+async function saveStoryMetadata(
+  supabase: ReturnType<typeof createClient>,
+  storyId: string,
+  metadata: StoryMetadata,
+): Promise<void> {
+  const { error } = await supabase
+    .from("stories")
+    .update({ story_metadata: metadata })
+    .eq("id", storyId);
+
+  if (error) {
+    logError("Metadata", "Failed to save story_metadata (run migration_phase6.sql?)", {
+      storyId, message: error.message,
+    });
+    throw new Error(`Could not save story metadata: ${error.message}`);
+  }
+  log("Metadata", "Saved story_metadata", { storyId });
+}
+
+function getProtagonist(metadata: StoryMetadata): StoryCharacter | undefined {
+  return metadata.characters.find(c => c.role.toLowerCase().includes("protagonist"))
+    ?? metadata.characters[0];
+}
+
+function formatPlotPointLabel(p: StoryPlotPoint): string {
+  if (p.type === "user_input" && p.userInput) {
+    return `"${p.userInput}" — ${p.description}`;
+  }
+  return p.description;
+}
+
+/** Re-sync user_input plot point pages to the first page they appear in story text. */
+function alignUserInputPagesToStory(story: StoryDraft, metadata: StoryMetadata): StoryMetadata {
+  for (const point of metadata.plotPoints) {
+    if (point.type !== "user_input" || !point.userInput) continue;
+
+    const needle = normalizeInputToken(point.userInput);
+    let firstPage = point.page;
+
+    for (let i = 0; i < story.pages.length; i++) {
+      const pageText = normalizeInputToken(story.pages[i]);
+      if (pageText.includes(needle)) {
+        firstPage = i + 1;
+        break;
+      }
+    }
+
+    if (firstPage !== point.page) {
+      log("Metadata", "Adjusted user_input page from story text", {
+        userInput: point.userInput,
+        was: point.page,
+        now: firstPage,
+      });
+      point.page = firstPage;
+    }
+  }
+  return metadata;
+}
+
+function buildPageIllustrationRules(metadata: StoryMetadata, pageNumber: number): string {
+  const allowedChars = metadata.characters.filter(c => c.introducedOnPage <= pageNumber);
+  const forbiddenChars = metadata.characters.filter(c => c.introducedOnPage > pageNumber);
+  const pastPlotPoints = metadata.plotPoints
+    .filter(p => p.page < pageNumber)
+    .sort((a, b) => a.page - b.page);
+  const currentPlotPoints = metadata.plotPoints.filter(p => p.page === pageNumber);
+  const futurePlotPoints = metadata.plotPoints
+    .filter(p => p.page > pageNumber)
+    .sort((a, b) => a.page - b.page);
+
+  const lines: string[] = [
+    `Illustration rules for page ${pageNumber}:`,
+    "CRITICAL: Illustrate ONLY what the scene text describes for this page.",
+    "Do NOT preview, hint at, or include activities, objects, or settings from later pages.",
+  ];
+
+  if (allowedChars.length) {
+    lines.push("Characters allowed in this scene:");
+    for (const c of allowedChars) {
+      lines.push(`- ${c.name} (introduced page ${c.introducedOnPage}): ${c.appearance}`);
+    }
+  }
+  if (forbiddenChars.length) {
+    lines.push(`Do NOT show yet (introduced later): ${forbiddenChars.map(c => `${c.name} (page ${c.introducedOnPage})`).join(", ")}`);
+  }
+  if (pastPlotPoints.length) {
+    lines.push("Story context so far (background only — do not redraw past scenes):");
+    for (const p of pastPlotPoints) {
+      lines.push(`- Page ${p.page}: ${formatPlotPointLabel(p)}`);
+    }
+  }
+  if (currentPlotPoints.length) {
+    lines.push("This page's story beats — focus the illustration on:");
+    for (const p of currentPlotPoints) {
+      lines.push(`- ${formatPlotPointLabel(p)}`);
+    }
+  }
+  if (futurePlotPoints.length) {
+    lines.push("Do NOT show or hint at these future story beats:");
+    for (const p of futurePlotPoints) {
+      lines.push(`- Page ${p.page}: ${formatPlotPointLabel(p)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function loadAnchorFromStorage(
+  supabase: ReturnType<typeof createClient>,
+  storyId: string,
+): Promise<Uint8Array> {
+  const { data, error } = await supabase.storage
+    .from(IMAGE_BUCKET)
+    .download(`${storyId}/page-1.png`);
+
+  if (error || !data) {
+    throw new Error(`Could not load character anchor from storage: ${error?.message ?? "missing page-1 image"}`);
+  }
+  return new Uint8Array(await data.arrayBuffer());
+}
+
+function buildAnchorImagePrompt(metadata: StoryMetadata, pageText: string, pageNumber: number): string {
   const scene = buildScenePrompt(pageText);
+  const protagonist = getProtagonist(metadata);
+  const rules = buildPageIllustrationRules(metadata, pageNumber);
+
   return `${STYLE_PROMPT}
 
 Character anchor illustration for a children's book. Establish the main character clearly.
 
-Main character — ${visualBible.protagonistName}:
-${visualBible.protagonistAppearance}
-${visualBible.otherCharacters ? `Other characters: ${visualBible.otherCharacters}` : ""}
-Color palette: ${visualBible.paletteNotes}
+Color palette: ${metadata.paletteNotes}
+${protagonist ? `Main character — ${protagonist.name}:\n${protagonist.appearance}` : ""}
 
-Scene: ${scene}
+${rules}
+
+Scene text (illustrate ONLY this): ${scene}
 
 The main character must be clearly visible and recognizable. Simple uncluttered background.
-Constraints: original characters only, no text, no words, no watermarks`;
+Constraints: original characters only, no text, no words, no watermarks, no future plot spoilers`;
 }
 
-function buildContinuationImagePrompt(visualBible: VisualBible, pageText: string): string {
+function buildFreshScenePrompt(
+  metadata: StoryMetadata,
+  pageText: string,
+  pageNumber: number,
+): string {
   const scene = buildScenePrompt(pageText);
-  return `Continue this children's book illustration using EXACTLY the same main character from Image 1.
+  const protagonist = getProtagonist(metadata);
+  const rules = buildPageIllustrationRules(metadata, pageNumber);
 
-New scene: ${scene}
+  return `${STYLE_PROMPT}
 
-Character consistency — DO NOT CHANGE ${visualBible.protagonistName}:
-${visualBible.protagonistAppearance}
-- Same face, hair, outfit, proportions, and color palette as Image 1
-${visualBible.otherCharacters ? `- Recurring characters must match their established look: ${visualBible.otherCharacters}` : ""}
+Children's book illustration for page ${pageNumber}.
+This must be a clearly new scene — different setting, background, layout, and character pose from page 1.
+
+Color palette: ${metadata.paletteNotes}
+${protagonist ? `Main character (keep this design consistent):\n${protagonist.name}: ${protagonist.appearance}` : ""}
+
+${rules}
+
+Scene text (illustrate ONLY this): ${scene}
+
+Use a fresh composition: new environment, new framing, new action. Do not repeat page 1's layout.
+Constraints: original characters only, no text, no words, no watermarks, no future plot spoilers`;
+}
+
+function buildContinuationImagePrompt(
+  metadata: StoryMetadata,
+  pageText: string,
+  pageNumber: number,
+): string {
+  const scene = buildScenePrompt(pageText);
+  const protagonist = getProtagonist(metadata);
+  const rules = buildPageIllustrationRules(metadata, pageNumber);
+
+  return `Create a NEW children's book illustration for page ${pageNumber}.
+Image 1 is a CHARACTER REFERENCE ONLY — do NOT copy its composition, background, or layout.
+
+${rules}
+
+Scene text (illustrate ONLY this): ${scene}
+
+Character consistency — preserve ONLY the character design from Image 1:
+${protagonist?.appearance ?? "Match the main character's face, hair, outfit, and proportions from Image 1"}
+
+Scene variation — REQUIRED (must differ clearly from Image 1 and prior pages):
+- New background and setting that matches the scene text
+- Different camera angle and framing (wide, medium, or close-up as fits the action)
+- Different character pose, expression, and body language
+- Different props and environment details
+- Do NOT reuse the same layout, pose, or backdrop as Image 1
 
 Style: ${STYLE_PROMPT}
-Palette: ${visualBible.paletteNotes}
+Palette: ${metadata.paletteNotes}
 
 Constraints:
-- Do NOT redesign or age the character
-- Keep the same hand-drawn minimal watercolor look as Image 1
+- Illustrate ONLY the scene text above — nothing from later pages
+- Same character design, but a visibly different illustration — not a duplicate
+- Keep the hand-drawn minimal watercolor look
 - No text, no words, no watermarks`;
 }
 
@@ -343,12 +647,13 @@ async function callImageEdit(
   anchorBytes: Uint8Array,
   prompt: string,
   openaiKey: string,
+  inputFidelity: "low" | "high" = "low",
 ): Promise<string> {
   const form = new FormData();
   form.append("model", IMAGE_MODEL);
   form.append("prompt", prompt);
   form.append("image", new Blob([anchorBytes], { type: "image/png" }), "character-anchor.png");
-  form.append("input_fidelity", "high");
+  form.append("input_fidelity", inputFidelity);
   form.append("quality", "medium");
   form.append("size", "1024x1024");
 
@@ -370,25 +675,29 @@ async function generatePageIllustration(
   pageNumber: number,
   pageText: string,
   openaiKey: string,
-  visualBible: VisualBible,
+  metadata: StoryMetadata,
   anchorBytes: Uint8Array | null,
   retries = 0,
 ): Promise<{ publicUrl: string; anchorBytes: Uint8Array }> {
   const isAnchor = pageNumber === 1 || anchorBytes === null;
+  // Page 2 uses a fresh generate so it doesn't clone page 1's composition via edit.
+  const useFreshGenerate = pageNumber === 2;
   const prompt = isAnchor
-    ? buildAnchorImagePrompt(visualBible, pageText)
-    : buildContinuationImagePrompt(visualBible, pageText);
+    ? buildAnchorImagePrompt(metadata, pageText, pageNumber)
+    : useFreshGenerate
+      ? buildFreshScenePrompt(metadata, pageText, pageNumber)
+      : buildContinuationImagePrompt(metadata, pageText, pageNumber);
 
   try {
     log("Images", `Generating image for page ${pageNumber}`, {
       attempt: retries + 1,
       model: IMAGE_MODEL,
-      mode: isAnchor ? "anchor" : "edit-with-reference",
+      mode: isAnchor ? "anchor" : useFreshGenerate ? "fresh-scene" : "edit-character-ref",
     });
 
-    const b64 = isAnchor
+    const b64 = isAnchor || useFreshGenerate
       ? await callImageGenerate(prompt, openaiKey)
-      : await callImageEdit(anchorBytes!, prompt, openaiKey);
+      : await callImageEdit(anchorBytes!, prompt, openaiKey, "low");
 
     const bytes = base64ToBytes(b64);
     const publicUrl = await uploadStoryImage(supabase, storyId, pageNumber, b64);
@@ -403,7 +712,7 @@ async function generatePageIllustration(
       log("Images", `Page ${pageNumber} failed, retrying`, { message, attempt: retries + 1 });
       await new Promise(r => setTimeout(r, 1000 * (retries + 1)));
       return generatePageIllustration(
-        supabase, storyId, pageNumber, pageText, openaiKey, visualBible, anchorBytes, retries + 1,
+        supabase, storyId, pageNumber, pageText, openaiKey, metadata, anchorBytes, retries + 1,
       );
     }
     logError("Images", `Page ${pageNumber} failed after ${MAX_RETRIES} retries`, { message });
@@ -445,94 +754,165 @@ async function updatePagesCompleted(
   }
 }
 
-async function savePage(
+async function updatePageImage(
   supabase: ReturnType<typeof createClient>,
   storyId: string,
   pageNumber: number,
-  text: string,
   imageUrl: string,
-  total: number,
 ): Promise<void> {
-  const { error: insertError } = await supabase.from("pages").insert({
-    story_id: storyId,
-    page_number: pageNumber,
-    text_content: text,
-    image_url: imageUrl,
-  });
+  const { error } = await supabase
+    .from("pages")
+    .update({ image_url: imageUrl })
+    .eq("story_id", storyId)
+    .eq("page_number", pageNumber);
 
-  if (insertError) {
-    logError("Run", "Failed to insert page", { storyId, pageNumber, message: insertError.message });
-    throw new Error(insertError.message);
+  if (error) {
+    throw new Error(`Failed to update page ${pageNumber} image: ${error.message}`);
   }
-
-  await updatePagesCompleted(supabase, storyId, pageNumber);
-  log("Run", "Page saved", { storyId, pageNumber, total });
 }
 
-async function generateAndSavePages(
+async function seedAllPagesWithPlaceholders(
   supabase: ReturnType<typeof createClient>,
   storyId: string,
-  story: StoryDraft,
-  openaiKey: string,
-  devMode: boolean,
-  dallePageLimit: number,
-  context: StoryContext,
+  pageTexts: string[],
 ): Promise<void> {
-  const pageTexts = story.pages;
-  log("Images", "Generating and saving pages", {
-    storyId, pageCount: pageTexts.length, devMode, dallePageLimit,
-  });
-  await updatePagesCompleted(supabase, storyId, 0);
-
-  let visualBible: VisualBible | null = null;
-  let characterAnchorBytes: Uint8Array | null = null;
-
-  if (!devMode && dallePageLimit > 0 && openaiKey) {
-    visualBible = await buildVisualBible(story, context, openaiKey);
-  }
-
   for (let idx = 0; idx < pageTexts.length; idx++) {
     const pageNumber = idx + 1;
-    const text = pageTexts[idx];
-    const useRealImage = !devMode && pageNumber <= dallePageLimit && visualBible;
+    const { error } = await supabase.from("pages").upsert({
+      story_id: storyId,
+      page_number: pageNumber,
+      text_content: pageTexts[idx],
+      image_url: placeholderImage(pageNumber),
+    }, { onConflict: "story_id,page_number" });
 
-    let imageUrl: string;
-    if (useRealImage) {
-      const result = await generatePageIllustration(
-        supabase,
-        storyId,
-        pageNumber,
-        text,
-        openaiKey,
-        visualBible!,
-        characterAnchorBytes,
-      );
-      imageUrl = result.publicUrl;
-      characterAnchorBytes = result.anchorBytes;
-    } else {
-      imageUrl = placeholderImage(pageNumber);
+    if (error) {
+      throw new Error(`Failed to seed page ${pageNumber}: ${error.message}`);
     }
+  }
+  await updatePagesCompleted(supabase, storyId, 0);
+  log("Run", "Seeded all pages with text and placeholders", { storyId, count: pageTexts.length });
+}
 
-    await savePage(
+async function runIllustrationBatch(
+  supabase: ReturnType<typeof createClient>,
+  storyId: string,
+  pageTexts: string[],
+  metadata: StoryMetadata,
+  openaiKey: string,
+  startPage: number,
+): Promise<{ startPage: number; endPage: number }> {
+  const batchEnd = Math.min(startPage + IMAGE_BATCH_SIZE - 1, pageTexts.length);
+  const batchNum = Math.ceil(startPage / IMAGE_BATCH_SIZE);
+
+  log("Images", `Starting batch ${batchNum} (pages ${startPage}-${batchEnd})`, { storyId });
+
+  const { error: statusError } = await supabase.from("stories").update({ status: "generating" }).eq("id", storyId);
+  if (statusError) throw new Error(statusError.message);
+
+  let anchorBytes: Uint8Array | null = startPage === 1 ? null : await loadAnchorFromStorage(supabase, storyId);
+
+  for (let pageNumber = startPage; pageNumber <= batchEnd; pageNumber++) {
+    const pageText = pageTexts[pageNumber - 1];
+    const result = await generatePageIllustration(
       supabase,
       storyId,
       pageNumber,
-      text,
-      imageUrl,
-      pageTexts.length,
+      pageText,
+      openaiKey,
+      metadata,
+      anchorBytes,
     );
+    await updatePageImage(supabase, storyId, pageNumber, result.publicUrl);
+    await updatePagesCompleted(supabase, storyId, pageNumber);
+    anchorBytes = result.anchorBytes;
+    log("Run", "Page illustrated", { storyId, pageNumber, batch: batchNum });
 
-    if (useRealImage && pageNumber < pageTexts.length) {
+    if (pageNumber < batchEnd) {
       await new Promise(r => setTimeout(r, 300));
     }
   }
 
-  log("Images", "All pages saved", {
-    storyId,
-    total: pageTexts.length,
-    illustratedPages: Math.min(dallePageLimit, pageTexts.length),
-    usedCharacterAnchor: Boolean(characterAnchorBytes),
+  log("Images", `Batch ${batchNum} complete`, { storyId, pages: `${startPage}-${batchEnd}` });
+
+  const { error: readyError } = await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
+  if (readyError) throw new Error(readyError.message);
+  log("Run", "Illustration batch complete — story ready", { storyId, pages: `${startPage}-${batchEnd}` });
+  return { startPage, endPage: batchEnd };
+}
+
+async function generateAndSavePages(
+  supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
+  storyId: string,
+  childId: string,
+  story: StoryDraft,
+  metadata: StoryMetadata,
+  openaiKey: string,
+  devMode: boolean,
+  dallePageLimit: number,
+): Promise<void> {
+  const pageTexts = story.pages;
+  log("Images", "Preparing pages for illustration", {
+    storyId, pageCount: pageTexts.length, devMode, dallePageLimit, batchSize: IMAGE_BATCH_SIZE,
   });
+
+  await seedAllPagesWithPlaceholders(supabase, storyId, pageTexts);
+
+  if (devMode || !openaiKey) {
+    await updatePagesCompleted(supabase, storyId, pageTexts.length);
+    log("Images", "Skipping real illustrations (dev mode or no API key)", { storyId });
+    return;
+  }
+
+  await runIllustrationBatch(supabase, storyId, pageTexts, metadata, openaiKey, 1);
+}
+
+async function loadStoryForIllustration(
+  supabase: ReturnType<typeof createClient>,
+  storyId: string,
+): Promise<{ pageTexts: string[]; metadata: StoryMetadata }> {
+  const { data: storyRow, error: storyError } = await supabase
+    .from("stories")
+    .select("title, story_metadata")
+    .eq("id", storyId)
+    .single();
+
+  if (storyError || !storyRow?.story_metadata) {
+    throw new Error(storyError?.message ?? "Story metadata not found — cannot continue illustrations");
+  }
+
+  const { data: pages, error: pagesError } = await supabase
+    .from("pages")
+    .select("page_number, text_content")
+    .eq("story_id", storyId)
+    .order("page_number");
+
+  if (pagesError || !pages?.length) {
+    throw new Error(pagesError?.message ?? "Story pages not found");
+  }
+
+  return {
+    pageTexts: pages.map(p => p.text_content ?? ""),
+    metadata: storyRow.story_metadata as StoryMetadata,
+  };
+}
+
+async function illustrateNextBatchRun(
+  supabase: ReturnType<typeof createClient>,
+  storyId: string,
+  openaiKey: string,
+): Promise<{ startPage: number; endPage: number } | null> {
+  const startPage = await findNextPlaceholderStart(supabase, storyId);
+  if (!startPage) {
+    log("Images", "No placeholder pages remaining", { storyId });
+    return null;
+  }
+
+  const { pageTexts, metadata } = await loadStoryForIllustration(supabase, storyId);
+  log("Images", "Manual next batch", { storyId, startPage, batchSize: IMAGE_BATCH_SIZE });
+
+  return await runIllustrationBatch(supabase, storyId, pageTexts, metadata, openaiKey, startPage);
 }
 
 async function generateStoryText(
@@ -811,6 +1191,32 @@ function buildDevStory(inputs: StoryInput[]): StoryDraft {
   return { title, pages: pages.slice(0, PAGE_COUNT) };
 }
 
+/** TEMP: remove before production — dumps metadata for manual QA */
+function logStoryMetadataDebug(storyId: string, metadata: StoryMetadata) {
+  console.log(`${LOG} [Metadata] ========== STORY METADATA ==========`);
+  console.log(`${LOG} [Metadata] Story ID: ${storyId}`);
+  console.log(`${LOG} [Metadata] Plot: ${metadata.plotSummary}`);
+  console.log(`${LOG} [Metadata] Palette: ${metadata.paletteNotes}`);
+  if (metadata.userInputs?.length) {
+    console.log(`${LOG} [Metadata] User inputs:`);
+    for (const input of metadata.userInputs) {
+      console.log(`${LOG} [Metadata]   • "${input.answer}" (${input.question})`);
+    }
+  }
+  for (const c of metadata.characters) {
+    console.log(`${LOG} [Metadata] Character: ${c.name} (${c.role}) — page ${c.introducedOnPage}`);
+    console.log(`${LOG} [Metadata]   ${c.appearance}`);
+  }
+  console.log(`${LOG} [Metadata] Critic: ${metadata.criticFeedback.rating}/100 — ${metadata.criticFeedback.inputsFitNaturally}`);
+  console.log(`${LOG} [Metadata] Faults: ${metadata.criticFeedback.faults}`);
+  console.log(`${LOG} [Metadata] Improvements: ${metadata.criticFeedback.improvements}`);
+  for (const p of metadata.plotPoints) {
+    const tag = p.type === "user_input" ? `input "${p.userInput}"` : "plot";
+    console.log(`${LOG} [Metadata] Page ${p.page} (${tag}): ${p.description}`);
+  }
+  console.log(`${LOG} [Metadata] ====================================`);
+}
+
 /** TEMP: remove before production — dumps full story text for manual QA */
 function logFullStoryText(
   storyId: string,
@@ -838,6 +1244,8 @@ function logFullStoryText(
 
 async function runGeneration(
   supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
   storyId: string,
   childId: string,
   inputs: StoryInput[],
@@ -863,6 +1271,7 @@ async function runGeneration(
 
   let story: StoryDraft;
   let storyMeta: StoryMeta | undefined;
+  let architectureMetadata: StoryMetadata;
 
   const useTemplateFallback = (reason: string) => {
     if (!allowTemplate) {
@@ -880,6 +1289,24 @@ async function runGeneration(
       fallbackReason: reason,
       reviewSkipped: true,
     };
+    architectureMetadata = sanitizeStoryMetadata({
+      characters: [{ name: "Hero", role: "protagonist", introducedOnPage: 1, appearance: "A friendly young explorer in simple adventure clothes" }],
+      plotSummary: story.title,
+      criticFeedback: {
+        rating: 0,
+        faults: "Template fallback story — not GPT-generated.",
+        improvements: "Set OPENAI_API_KEY and redeploy for real stories.",
+        inputsFitNaturally: "items_make_sense",
+      },
+      plotPoints: inputs.map((input, i) => ({
+        page: Math.min(i * 3 + 1, PAGE_COUNT),
+        description: `Story weaves in "${input.answer}"`,
+        type: "user_input" as const,
+        userInput: input.answer,
+      })),
+      paletteNotes: "Soft muted watercolor storybook palette",
+      userInputs: [],
+    }, inputs);
   };
 
   if (!openaiKey) {
@@ -889,11 +1316,23 @@ async function runGeneration(
       const result = await generateStoryWithReview(inputs, openaiKey, childContext);
       story = { title: result.title, pages: result.pages };
       storyMeta = result.meta;
+      architectureMetadata = await buildStoryMetadata(story, inputs, childContext, openaiKey);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       useTemplateFallback(reason);
     }
   }
+
+  log("Metadata", "Critic review", {
+    rating: architectureMetadata.criticFeedback.rating,
+    inputsFit: architectureMetadata.criticFeedback.inputsFitNaturally,
+    faults: architectureMetadata.criticFeedback.faults.slice(0, 120),
+  });
+
+  architectureMetadata.illustrationPageLimit = PAGE_COUNT;
+
+  await saveStoryMetadata(supabase, storyId, architectureMetadata);
+  logStoryMetadataDebug(storyId, architectureMetadata);
 
   // TEMP: remove before production
   logFullStoryText(storyId, story, storyMeta);
@@ -903,26 +1342,34 @@ async function runGeneration(
 
   if (devMode) {
     log("Run", "Dev mode: using placeholder images", { pageCount: story.pages.length });
-  } else if (dallePageLimit < story.pages.length) {
-    log("Run", "Partial illustrations: real images for first pages only", {
-      dallePageLimit, placeholdersAfter: story.pages.length - dallePageLimit,
-    });
   } else {
-    log("Run", "Generating GPT Image illustrations for all pages", { pageCount: story.pages.length });
+    log("Run", "Generating first illustration batch only (use manual batch for more)", {
+      pageCount: story.pages.length,
+      batchSize: IMAGE_BATCH_SIZE,
+    });
   }
 
   await generateAndSavePages(
-    supabase, storyId, story, openaiKey ?? "", devMode, dallePageLimit, childContext,
+    supabase,
+    supabaseUrl,
+    serviceKey,
+    storyId,
+    childId,
+    story,
+    architectureMetadata,
+    openaiKey ?? "",
+    devMode,
+    dallePageLimit,
   );
 
-  const { error: readyError } = await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
-  if (readyError) {
-    logError("Run", "Failed to set status=ready", { storyId, message: readyError.message });
-    throw new Error(readyError.message);
+  // Real illustrations mark ready after the first batch; dev/placeholder mode finishes here
+  if (devMode || !openaiKey) {
+    const { error: readyError } = await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
+    if (readyError) throw new Error(readyError.message);
   }
 
   log("Run", "Generation complete", { storyId, title: story.title, durationMs: Date.now() - started });
-  return { title: story.title, pages: story.pages, meta: storyMeta };
+  return { title: story.title, pages: story.pages, meta: storyMeta, storyMetadata: architectureMetadata };
 }
 
 Deno.serve(async (req) => {
@@ -931,32 +1378,75 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { storyId, childId, inputs, devMode = false, allowTemplate = false, dallePageLimit: requestedLimit } = await req.json();
+    const body = await req.json();
+    const {
+      storyId,
+      childId,
+      inputs,
+      devMode = false,
+      allowTemplate = false,
+      dallePageLimit: requestedLimit,
+      mode,
+    } = body;
+
+    const openaiKey = Deno.env.get("OPENAI_API_KEY");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      logError("Request", "Missing Supabase environment variables");
+      return new Response(JSON.stringify({ error: "Missing Supabase environment variables" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    if (mode === "illustrate_next_batch") {
+      if (!storyId || !openaiKey) {
+        return new Response(JSON.stringify({ error: "Missing storyId or OPENAI_API_KEY" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        await assertDevAdmin(req, supabaseUrl);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message === "Unauthorized" ? 401 : message === "Forbidden" ? 403 : 400;
+        logError("Request", "Manual illustration denied", { storyId, message });
+        return new Response(JSON.stringify({ error: message }), {
+          status, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      log("Request", "Manual next illustration batch", { storyId });
+
+      const batchRun = async () => {
+        try {
+          await illustrateNextBatchRun(supabase, storyId, openaiKey);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logError("Run", "Manual illustration batch failed", { storyId, message });
+          await setStoryError(supabase, storyId, message);
+        }
+      };
+
+      EdgeRuntime.waitUntil(batchRun());
+      return new Response(
+        JSON.stringify({ message: "Next illustration batch started", storyId, functionVersion: FUNCTION_VERSION }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const dallePageLimit = devMode ? 0 : resolveDallePageLimit(requestedLimit, PAGE_COUNT);
+
     log("Request", "Received", { storyId, childId, devMode, allowTemplate, dallePageLimit, inputCount: inputs?.length });
 
     if (!storyId || !childId || !inputs) {
       logError("Request", "Missing storyId, childId, or inputs");
       return new Response(JSON.stringify({ error: "Missing storyId, childId, or inputs" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const openaiKey = Deno.env.get("OPENAI_API_KEY");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-    log("Request", "Environment check", {
-      hasOpenAiKey: Boolean(openaiKey),
-      hasSupabaseUrl: Boolean(supabaseUrl),
-      hasServiceKey: Boolean(supabaseServiceKey),
-      devMode,
-    });
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-      logError("Request", "Missing Supabase environment variables");
-      return new Response(JSON.stringify({ error: "Missing Supabase environment variables" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -967,13 +1457,21 @@ Deno.serve(async (req) => {
       });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    log("Request", "Environment check", {
+      hasOpenAiKey: Boolean(openaiKey),
+      hasSupabaseUrl: Boolean(supabaseUrl),
+      hasServiceKey: Boolean(supabaseServiceKey),
+      devMode,
+    });
 
     let debugStory: { title: string; pages: string[]; meta?: StoryMeta } | undefined;
 
     const generate = async () => {
       try {
-        debugStory = await runGeneration(supabase, storyId, childId, inputs, openaiKey ?? "", devMode, allowTemplate, dallePageLimit);
+        debugStory = await runGeneration(
+          supabase, supabaseUrl, supabaseServiceKey, storyId, childId, inputs,
+          openaiKey ?? "", devMode, allowTemplate, dallePageLimit,
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logError("Run", "Generation failed — setting status=error", { storyId, message });
@@ -985,7 +1483,10 @@ Deno.serve(async (req) => {
       log("Request", "Running inline (dev mode)");
       let generationError: string | undefined;
       try {
-        debugStory = await runGeneration(supabase, storyId, childId, inputs, openaiKey ?? "", devMode, allowTemplate, dallePageLimit);
+        debugStory = await runGeneration(
+          supabase, supabaseUrl, supabaseServiceKey, storyId, childId, inputs,
+          openaiKey ?? "", devMode, allowTemplate, dallePageLimit,
+        );
       } catch (err) {
         generationError = err instanceof Error ? err.message : String(err);
         logError("Run", "Generation failed — setting status=error", { storyId, message: generationError });
