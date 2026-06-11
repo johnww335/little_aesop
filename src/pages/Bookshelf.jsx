@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { getStoriesForChild, deleteStory, STORY_PAGE_COUNT } from '../lib/stories'
+import { getStoriesForChild, deleteStory, STORY_PAGE_COUNT, computeIllustrationProgress, formatStoryFailureSummary, getIllustrationTargetFromEnv } from '../lib/stories'
 import { getChildren, getAvatarEmoji } from '../lib/children'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
@@ -137,24 +137,29 @@ export default function Bookshelf() {
 
 function StoryCard({ story, coverImage, onDelete }) {
   const navigate = useNavigate()
+  const illustrationTarget = getIllustrationTargetFromEnv() || STORY_PAGE_COUNT
   const date = new Date(story.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   const inProgress = story.status === 'pending' || story.status === 'generating'
   const failed = story.status === 'error'
-  const pagesCompleted = Math.max(story.pages_completed ?? 0, story.pages?.length ?? 0)
-  const progressPct = Math.round((pagesCompleted / STORY_PAGE_COUNT) * 100)
+  const { illustratedCount } = computeIllustrationProgress(story.pages ?? [])
+  const progressPct = Math.round((illustratedCount / illustrationTarget) * 100)
+  const failureSummary = failed ? formatStoryFailureSummary(story, illustrationTarget) : null
 
   const statusLabel = failed
-    ? 'Failed to create'
+    ? 'Failed — tap to retry'
     : inProgress
-      ? pagesCompleted > 0
-        ? `Painting ${pagesCompleted}/${STORY_PAGE_COUNT}`
+      ? illustratedCount > 0
+        ? `Painting ${illustratedCount}/${illustrationTarget}`
         : story.title
           ? 'Writing story…'
           : 'Starting…'
       : null
 
   const handleClick = () => {
-    if (failed) return
+    if (failed) {
+      navigate(`/story/${story.id}/generating`)
+      return
+    }
     navigate(inProgress ? `/story/${story.id}/generating` : `/story/${story.id}/read`)
   }
 
@@ -171,7 +176,7 @@ function StoryCard({ story, coverImage, onDelete }) {
         border: `1px solid ${failed ? 'rgba(192,83,74,0.35)' : inProgress ? 'rgba(200,136,42,0.35)' : 'var(--border)'}`,
         borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
-        cursor: failed ? 'default' : 'pointer',
+        cursor: failed ? 'pointer' : 'pointer',
         boxShadow: 'var(--shadow-sm)',
         transition: 'box-shadow 0.15s, transform 0.15s',
         opacity: inProgress || failed ? 0.92 : 1,
@@ -258,10 +263,21 @@ function StoryCard({ story, coverImage, onDelete }) {
               fontSize: 12,
               color: failed ? 'var(--rose)' : 'var(--gold)',
               fontWeight: 600,
-              marginBottom: 6,
+              marginBottom: failed ? 4 : 6,
             }}>
               {statusLabel}
             </p>
+            {failed && failureSummary && (
+              <p style={{
+                fontSize: 11,
+                color: 'var(--ink-muted)',
+                lineHeight: 1.45,
+                marginBottom: 6,
+                wordBreak: 'break-word',
+              }}>
+                {failureSummary}
+              </p>
+            )}
             {inProgress && (
               <div style={{ height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
                 <div style={{

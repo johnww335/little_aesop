@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   getStoryWithPages,
@@ -6,6 +6,8 @@ import {
   isDevAdmin,
   countPlaceholderPages,
   ILLUSTRATION_BATCH_SIZE,
+  getUserInputIntroForPage,
+  splitTextAroundPhrase,
 } from '../lib/stories'
 import { useAuth } from '../contexts/AuthContext'
 import AppHeader from '../components/AppHeader'
@@ -22,6 +24,8 @@ export default function StoryReader() {
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchError, setBatchError] = useState('')
   const [fullscreen, setFullscreen] = useState(false)
+  const [sparklePages, setSparklePages] = useState([])
+  const sparkledRef = useRef(new Set())
 
   const exitFullscreen = useCallback(() => setFullscreen(false), [])
   const toggleFullscreen = useCallback(() => setFullscreen(f => !f), [])
@@ -56,6 +60,11 @@ export default function StoryReader() {
     setLoadedImages({})
   }, [currentSpread])
 
+  useEffect(() => {
+    sparkledRef.current = new Set()
+    setSparklePages([])
+  }, [storyId])
+
   const pages = story?.pages || []
   const pageCount = pages.length
   const placeholderCount = countPlaceholderPages(pages)
@@ -80,6 +89,22 @@ export default function StoryReader() {
 
   const leftPageNum = currentSpread * 2 + 1
   const rightPageNum = currentSpread * 2 + 2
+
+  useEffect(() => {
+    if (!story?.story_metadata) return undefined
+
+    const pagesOnSpread = [leftPageNum, rightPageNum].filter(
+      (p) => p <= pageCount && getUserInputIntroForPage(story.story_metadata, p),
+    )
+    const fresh = pagesOnSpread.filter((p) => !sparkledRef.current.has(p))
+    if (fresh.length === 0) return undefined
+
+    fresh.forEach((p) => sparkledRef.current.add(p))
+    setSparklePages(fresh)
+
+    const timer = setTimeout(() => setSparklePages([]), 2400)
+    return () => clearTimeout(timer)
+  }, [currentSpread, story?.story_metadata, leftPageNum, rightPageNum, pageCount])
 
   const handlePrev = useCallback(() => {
     setCurrentSpread(s => Math.max(0, s - 1))
@@ -157,6 +182,8 @@ export default function StoryReader() {
               side="left"
               loaded={!!loadedImages[leftPageNum]}
               onImageLoad={() => markImageLoaded(leftPageNum)}
+              highlightPhrase={getUserInputIntroForPage(story.story_metadata, leftPageNum)}
+              sparkleActive={sparklePages.includes(leftPageNum)}
             />
 
             <div className="reader-spine" aria-hidden="true" />
@@ -167,6 +194,8 @@ export default function StoryReader() {
               side="right"
               loaded={!!loadedImages[rightPageNum]}
               onImageLoad={() => markImageLoaded(rightPageNum)}
+              highlightPhrase={getUserInputIntroForPage(story.story_metadata, rightPageNum)}
+              sparkleActive={sparklePages.includes(rightPageNum)}
             />
           </div>
         </div>
@@ -229,7 +258,7 @@ export default function StoryReader() {
   )
 }
 
-function BookPagePanel({ page, pageNum, side, loaded, onImageLoad }) {
+function BookPagePanel({ page, pageNum, side, loaded, onImageLoad, highlightPhrase, sparkleActive }) {
   if (!page) {
     return (
       <div className={`reader-page reader-page-${side} reader-page-empty`}>
@@ -256,9 +285,35 @@ function BookPagePanel({ page, pageNum, side, loaded, onImageLoad }) {
         )}
       </div>
       <div className="reader-text-wrap">
-        <p className="reader-text">{page.text_content}</p>
+        <StoryPageText
+          text={page.text_content}
+          highlightPhrase={highlightPhrase}
+          sparkleActive={sparkleActive}
+        />
       </div>
     </div>
+  )
+}
+
+function StoryPageText({ text, highlightPhrase, sparkleActive }) {
+  const segments = splitTextAroundPhrase(text, highlightPhrase)
+
+  return (
+    <p className="reader-text">
+      {segments.map((seg, i) =>
+        seg.type === 'highlight' ? (
+          <span
+            key={i}
+            className={`reader-input-highlight${sparkleActive ? ' reader-input-highlight--active' : ''}`}
+          >
+            {sparkleActive && <span className="reader-sparkle" aria-hidden="true">✦</span>}
+            {seg.value}
+          </span>
+        ) : (
+          <span key={i}>{seg.value}</span>
+        ),
+      )}
+    </p>
   )
 }
 
@@ -525,6 +580,60 @@ const READER_STYLES = `
     -webkit-line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  .reader-input-highlight {
+    position: relative;
+    display: inline;
+    border-radius: 3px;
+  }
+
+  .reader-input-highlight--active {
+    animation: readerInputSparkle 2.4s ease forwards;
+  }
+
+  @keyframes readerInputSparkle {
+    0% {
+      background: rgba(200, 136, 42, 0.5);
+      box-shadow: 0 0 10px rgba(200, 136, 42, 0.45);
+    }
+    25% {
+      background: rgba(200, 136, 42, 0.35);
+    }
+    100% {
+      background: transparent;
+      box-shadow: none;
+    }
+  }
+
+  .reader-sparkle {
+    position: absolute;
+    top: -0.55em;
+    right: -0.35em;
+    font-size: 0.85em;
+    color: var(--gold);
+    line-height: 1;
+    pointer-events: none;
+    animation: readerSparklePop 2.4s ease forwards;
+  }
+
+  @keyframes readerSparklePop {
+    0% {
+      opacity: 0;
+      transform: scale(0.4) rotate(-20deg);
+    }
+    12% {
+      opacity: 1;
+      transform: scale(1.3) rotate(10deg);
+    }
+    35% {
+      opacity: 1;
+      transform: scale(1) rotate(0deg);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(0.5) rotate(30deg);
+    }
   }
 
   .reader-nav {

@@ -96,8 +96,8 @@ export default function StoryPrompts() {
       return
     }
 
-    log('StoryPrompts', 'Navigating to generating page', { storyId: story.id })
-    navigate(`/story/${story.id}/generating`)
+    log('StoryPrompts', 'Navigating to bedtime routine', { storyId: story.id })
+    navigate(`/child/${childId}/story/${story.id}/bedtime`)
   }
 
   const isLastStep = currentStep === questions.length - 1

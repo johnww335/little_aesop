@@ -2,8 +2,10 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const LOG = "[generate-story]";
-const FUNCTION_VERSION = "2025-06-17";
+const FUNCTION_VERSION = "2025-06-19";
 const IMAGE_BATCH_SIZE = 5;
+/** Chained auto-runs use one page per edge invocation to stay within wall-clock limits. */
+const CHAIN_PAGE_SIZE = 1;
 
 function log(stage: string, message: string, data?: Record<string, unknown>) {
   if (data) console.log(`${LOG} [${stage}] ${message}`, data);
@@ -23,7 +25,7 @@ const corsHeaders = {
 const STYLE_PROMPT = "minimal hand-drawn cartoon illustration, loose sketchy pencil and ink linework, simple shapes, soft muted colors, gentle watercolor wash, uncluttered composition with plenty of empty space, friendly expressive characters, warm children's storybook aesthetic, no text, no words, no letters";
 const IMAGE_MODEL = Deno.env.get("IMAGE_MODEL") ?? "gpt-image-1.5";
 const IMAGE_BUCKET = "story-images";
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 1;
 const MAX_QUALITY_ATTEMPTS = 3;
 const PAGE_COUNT = 20;
 
@@ -232,6 +234,34 @@ async function assertDevAdmin(
   if (user.email.toLowerCase() !== adminEmail.toLowerCase()) {
     throw new Error("Forbidden");
   }
+}
+
+async function assertStoryOwner(
+  req: Request,
+  supabaseUrl: string,
+  storyId: string,
+): Promise<{ childId: string }> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new Error("Unauthorized");
+  }
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!anonKey) throw new Error("Missing SUPABASE_ANON_KEY");
+
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: { user }, error: userError } = await userClient.auth.getUser();
+  if (userError || !user) throw new Error("Unauthorized");
+
+  const { data: story, error } = await userClient
+    .from("stories")
+    .select("id, child_id")
+    .eq("id", storyId)
+    .single();
+
+  if (error || !story?.child_id) throw new Error("Story not found");
+  return { childId: story.child_id as string };
 }
 
 async function findNextPlaceholderStart(
@@ -621,7 +651,7 @@ function extractImageB64(data: Record<string, unknown>): string {
   throw new Error("OpenAI returned no image data");
 }
 
-async function callImageGenerate(prompt: string, openaiKey: string): Promise<string> {
+async function callImageGenerate(prompt: string, openaiKey: string, quality = "medium"): Promise<string> {
   const response = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: {
@@ -633,7 +663,7 @@ async function callImageGenerate(prompt: string, openaiKey: string): Promise<str
       prompt,
       n: 1,
       size: "1024x1024",
-      quality: "medium",
+      quality,
     }),
   });
   const data = await response.json();
@@ -648,13 +678,14 @@ async function callImageEdit(
   prompt: string,
   openaiKey: string,
   inputFidelity: "low" | "high" = "low",
+  quality = "medium",
 ): Promise<string> {
   const form = new FormData();
   form.append("model", IMAGE_MODEL);
   form.append("prompt", prompt);
   form.append("image", new Blob([anchorBytes], { type: "image/png" }), "character-anchor.png");
   form.append("input_fidelity", inputFidelity);
-  form.append("quality", "medium");
+  form.append("quality", quality);
   form.append("size", "1024x1024");
 
   const response = await fetch("https://api.openai.com/v1/images/edits", {
@@ -678,7 +709,9 @@ async function generatePageIllustration(
   metadata: StoryMetadata,
   anchorBytes: Uint8Array | null,
   retries = 0,
+  fastMode = false,
 ): Promise<{ publicUrl: string; anchorBytes: Uint8Array }> {
+  const imageQuality = fastMode ? "low" : "medium";
   const isAnchor = pageNumber === 1 || anchorBytes === null;
   // Page 2 uses a fresh generate so it doesn't clone page 1's composition via edit.
   const useFreshGenerate = pageNumber === 2;
@@ -688,16 +721,27 @@ async function generatePageIllustration(
       ? buildFreshScenePrompt(metadata, pageText, pageNumber)
       : buildContinuationImagePrompt(metadata, pageText, pageNumber);
 
+  const generateFreshFallback = async (): Promise<string> => {
+    log("Images", `Page ${pageNumber} using fresh-generate fallback`, { storyId });
+    return await callImageGenerate(
+      buildFreshScenePrompt(metadata, pageText, pageNumber),
+      openaiKey,
+      imageQuality,
+    );
+  };
+
   try {
     log("Images", `Generating image for page ${pageNumber}`, {
       attempt: retries + 1,
       model: IMAGE_MODEL,
       mode: isAnchor ? "anchor" : useFreshGenerate ? "fresh-scene" : "edit-character-ref",
+      quality: imageQuality,
+      fastMode,
     });
 
     const b64 = isAnchor || useFreshGenerate
-      ? await callImageGenerate(prompt, openaiKey)
-      : await callImageEdit(anchorBytes!, prompt, openaiKey, "low");
+      ? await callImageGenerate(prompt, openaiKey, imageQuality)
+      : await callImageEdit(anchorBytes!, prompt, openaiKey, "low", imageQuality);
 
     const bytes = base64ToBytes(b64);
     const publicUrl = await uploadStoryImage(supabase, storyId, pageNumber, b64);
@@ -712,8 +756,20 @@ async function generatePageIllustration(
       log("Images", `Page ${pageNumber} failed, retrying`, { message, attempt: retries + 1 });
       await new Promise(r => setTimeout(r, 1000 * (retries + 1)));
       return generatePageIllustration(
-        supabase, storyId, pageNumber, pageText, openaiKey, metadata, anchorBytes, retries + 1,
+        supabase, storyId, pageNumber, pageText, openaiKey, metadata, anchorBytes, retries + 1, fastMode,
       );
+    }
+    if (!isAnchor && !useFreshGenerate) {
+      try {
+        const b64 = await generateFreshFallback();
+        const bytes = base64ToBytes(b64);
+        const publicUrl = await uploadStoryImage(supabase, storyId, pageNumber, b64);
+        log("Images", `Page ${pageNumber} ready via fresh-generate fallback`);
+        return { publicUrl, anchorBytes: anchorBytes! };
+      } catch (fallbackErr) {
+        const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        logError("Images", `Page ${pageNumber} fresh-generate fallback failed`, { message: fallbackMessage });
+      }
     }
     logError("Images", `Page ${pageNumber} failed after ${MAX_RETRIES} retries`, { message });
     throw new Error(`Page ${pageNumber}: ${message}`);
@@ -724,15 +780,31 @@ async function setStoryError(
   supabase: ReturnType<typeof createClient>,
   storyId: string,
   message: string,
+  context?: Record<string, unknown>,
 ): Promise<void> {
-  const trimmed = message.slice(0, 500);
+  logError("Run", "Story marked as error", { storyId, message, ...context });
+
+  let fullMessage = message;
+  if (context?.stage) {
+    fullMessage = `[${context.stage}] ${message}`;
+  }
+  if (context?.continueFromPage != null) {
+    fullMessage += ` (next page: ${context.continueFromPage})`;
+  } else if (context?.page != null) {
+    fullMessage += ` (page ${context.page})`;
+  }
+  if (context?.httpStatus != null) {
+    fullMessage += ` [HTTP ${context.httpStatus}]`;
+  }
+
+  const trimmed = fullMessage.slice(0, 500);
   const { error } = await supabase
     .from("stories")
     .update({ status: "error", error_message: trimmed })
     .eq("id", storyId);
 
   if (error) {
-    logError("Run", "Failed to save error_message — saving status only", { storyId, message: error.message });
+    logError("Run", "Failed to save error_message — saving status only", { storyId, dbError: error.message, message: trimmed });
     await supabase.from("stories").update({ status: "error" }).eq("id", storyId);
   }
 }
@@ -793,18 +865,80 @@ async function seedAllPagesWithPlaceholders(
   log("Run", "Seeded all pages with text and placeholders", { storyId, count: pageTexts.length });
 }
 
+async function chainNextIllustrationBatch(
+  supabaseUrl: string,
+  serviceKey: string,
+  storyId: string,
+  childId: string,
+  continueFromPage: number,
+  illustrationTarget: number,
+): Promise<void> {
+  log("Images", "Chaining next illustration batch", { storyId, continueFromPage, illustrationTarget });
+  const response = await fetch(`${supabaseUrl}/functions/v1/generate-story`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${serviceKey}`,
+      "apikey": serviceKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      mode: "continue_illustrations",
+      storyId,
+      childId,
+      continueFromPage,
+      illustrationTarget,
+    }),
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text();
+    let body: Record<string, unknown> = {};
+    try {
+      body = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      body = { raw: bodyText.slice(0, 300) };
+    }
+    const apiMessage =
+      (typeof body.error === "string" && body.error) ||
+      (typeof body.message === "string" && body.message) ||
+      (typeof body.msg === "string" && body.msg) ||
+      bodyText.slice(0, 200) ||
+      "unknown error";
+
+    logError("Images", "Chain request failed", {
+      storyId,
+      continueFromPage,
+      illustrationTarget,
+      httpStatus: response.status,
+      apiMessage,
+      body,
+    });
+
+    throw new Error(`Chain to page ${continueFromPage} failed: ${apiMessage}`);
+  }
+}
+
 async function runIllustrationBatch(
   supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
   storyId: string,
+  childId: string,
   pageTexts: string[],
   metadata: StoryMetadata,
   openaiKey: string,
   startPage: number,
+  illustrationTarget: number,
+  chainBatches = true,
 ): Promise<{ startPage: number; endPage: number }> {
-  const batchEnd = Math.min(startPage + IMAGE_BATCH_SIZE - 1, pageTexts.length);
-  const batchNum = Math.ceil(startPage / IMAGE_BATCH_SIZE);
+  const pagesThisRun = chainBatches ? CHAIN_PAGE_SIZE : IMAGE_BATCH_SIZE;
+  const batchEnd = Math.min(startPage + pagesThisRun - 1, pageTexts.length, illustrationTarget);
+  const batchNum = Math.ceil(startPage / CHAIN_PAGE_SIZE);
+  const totalPages = Math.min(illustrationTarget, pageTexts.length);
 
-  log("Images", `Starting batch ${batchNum} (pages ${startPage}-${batchEnd})`, { storyId });
+  log("Images", `Illustrating page${batchEnd > startPage ? "s" : ""} ${startPage}${batchEnd > startPage ? `-${batchEnd}` : ""} (${batchNum}/${totalPages} chained)`, {
+    storyId, illustrationTarget, chainBatches, pagesThisRun,
+  });
 
   const { error: statusError } = await supabase.from("stories").update({ status: "generating" }).eq("id", storyId);
   if (statusError) throw new Error(statusError.message);
@@ -821,6 +955,8 @@ async function runIllustrationBatch(
       openaiKey,
       metadata,
       anchorBytes,
+      0,
+      chainBatches,
     );
     await updatePageImage(supabase, storyId, pageNumber, result.publicUrl);
     await updatePagesCompleted(supabase, storyId, pageNumber);
@@ -832,11 +968,17 @@ async function runIllustrationBatch(
     }
   }
 
-  log("Images", `Batch ${batchNum} complete`, { storyId, pages: `${startPage}-${batchEnd}` });
+  log("Images", `Page run complete`, { storyId, pages: `${startPage}-${batchEnd}` });
+
+  const nextPage = batchEnd + 1;
+  if (chainBatches && nextPage <= illustrationTarget && nextPage <= pageTexts.length) {
+    await chainNextIllustrationBatch(supabaseUrl, serviceKey, storyId, childId, nextPage, illustrationTarget);
+    return { startPage, endPage: batchEnd };
+  }
 
   const { error: readyError } = await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
   if (readyError) throw new Error(readyError.message);
-  log("Run", "Illustration batch complete — story ready", { storyId, pages: `${startPage}-${batchEnd}` });
+  log("Run", "Illustration complete — story ready", { storyId, pages: `${startPage}-${batchEnd}`, illustrationTarget });
   return { startPage, endPage: batchEnd };
 }
 
@@ -865,7 +1007,47 @@ async function generateAndSavePages(
     return;
   }
 
-  await runIllustrationBatch(supabase, storyId, pageTexts, metadata, openaiKey, 1);
+  await runIllustrationBatch(
+    supabase,
+    supabaseUrl,
+    serviceKey,
+    storyId,
+    childId,
+    pageTexts,
+    metadata,
+    openaiKey,
+    1,
+    dallePageLimit,
+    true,
+  );
+}
+
+async function continueIllustrationRun(
+  supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
+  storyId: string,
+  childId: string,
+  continueFromPage: number,
+  illustrationTarget: number,
+  openaiKey: string,
+): Promise<void> {
+  const { pageTexts, metadata } = await loadStoryForIllustration(supabase, storyId);
+  log("Images", "Continuing illustration batches", { storyId, continueFromPage, illustrationTarget });
+
+  await runIllustrationBatch(
+    supabase,
+    supabaseUrl,
+    serviceKey,
+    storyId,
+    childId,
+    pageTexts,
+    metadata,
+    openaiKey,
+    continueFromPage,
+    illustrationTarget,
+    true,
+  );
 }
 
 async function loadStoryForIllustration(
@@ -900,6 +1082,8 @@ async function loadStoryForIllustration(
 
 async function illustrateNextBatchRun(
   supabase: ReturnType<typeof createClient>,
+  supabaseUrl: string,
+  serviceKey: string,
   storyId: string,
   openaiKey: string,
 ): Promise<{ startPage: number; endPage: number } | null> {
@@ -910,9 +1094,32 @@ async function illustrateNextBatchRun(
   }
 
   const { pageTexts, metadata } = await loadStoryForIllustration(supabase, storyId);
-  log("Images", "Manual next batch", { storyId, startPage, batchSize: IMAGE_BATCH_SIZE });
 
-  return await runIllustrationBatch(supabase, storyId, pageTexts, metadata, openaiKey, startPage);
+  const { data: storyRow, error: storyError } = await supabase
+    .from("stories")
+    .select("child_id")
+    .eq("id", storyId)
+    .single();
+
+  if (storyError || !storyRow?.child_id) {
+    throw new Error(storyError?.message ?? "Story child_id not found — cannot chain illustrations");
+  }
+
+  log("Images", "Manual next batch (single page + chain)", { storyId, startPage });
+
+  return await runIllustrationBatch(
+    supabase,
+    supabaseUrl,
+    serviceKey,
+    storyId,
+    storyRow.child_id,
+    pageTexts,
+    metadata,
+    openaiKey,
+    startPage,
+    PAGE_COUNT,
+    true,
+  );
 }
 
 async function generateStoryText(
@@ -1343,9 +1550,11 @@ async function runGeneration(
   if (devMode) {
     log("Run", "Dev mode: using placeholder images", { pageCount: story.pages.length });
   } else {
-    log("Run", "Generating first illustration batch only (use manual batch for more)", {
+    log("Run", "Generating illustrations in batches until target", {
       pageCount: story.pages.length,
+      illustrationTarget: dallePageLimit,
       batchSize: IMAGE_BATCH_SIZE,
+      batches: Math.ceil(dallePageLimit / IMAGE_BATCH_SIZE),
     });
   }
 
@@ -1362,7 +1571,7 @@ async function runGeneration(
     dallePageLimit,
   );
 
-  // Real illustrations mark ready after the first batch; dev/placeholder mode finishes here
+  // Real illustrations mark ready after the final batch; dev/placeholder mode finishes here
   if (devMode || !openaiKey) {
     const { error: readyError } = await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
     if (readyError) throw new Error(readyError.message);
@@ -1386,7 +1595,9 @@ Deno.serve(async (req) => {
       devMode = false,
       allowTemplate = false,
       dallePageLimit: requestedLimit,
+      illustrationTarget: requestedTarget,
       mode,
+      continueFromPage,
     } = body;
 
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
@@ -1401,6 +1612,129 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    if (mode === "version") {
+      return new Response(
+        JSON.stringify({
+          functionVersion: FUNCTION_VERSION,
+          hasOpenAiKey: !!openaiKey,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (mode === "resume_illustrations") {
+      if (!storyId || !openaiKey) {
+        return new Response(JSON.stringify({ error: "Missing storyId or OPENAI_API_KEY" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      let ownerChildId: string;
+      try {
+        ({ childId: ownerChildId } = await assertStoryOwner(req, supabaseUrl, storyId));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message === "Unauthorized" ? 401 : message === "Story not found" ? 404 : 403;
+        return new Response(JSON.stringify({ error: message }), {
+          status, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const illustrationTarget = resolveDallePageLimit(
+        requestedTarget ?? requestedLimit,
+        PAGE_COUNT,
+      );
+      const startPage = await findNextPlaceholderStart(supabase, storyId);
+
+      if (!startPage) {
+        await supabase.from("stories").update({ status: "ready", error_message: null }).eq("id", storyId);
+        return new Response(
+          JSON.stringify({ message: "All pages illustrated — story marked ready", storyId, functionVersion: FUNCTION_VERSION }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      log("Request", "Resuming illustrations from placeholder", { storyId, startPage, illustrationTarget });
+
+      await supabase.from("stories").update({ status: "generating", error_message: null }).eq("id", storyId);
+
+      const resumeRun = async () => {
+        try {
+          await continueIllustrationRun(
+            supabase, supabaseUrl, supabaseServiceKey, storyId, ownerChildId,
+            startPage, illustrationTarget, openaiKey,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logError("Run", "Resume illustration failed", { storyId, startPage, message });
+          await setStoryError(supabase, storyId, message, { stage: "resume", continueFromPage: startPage });
+        }
+      };
+
+      EdgeRuntime.waitUntil(resumeRun());
+      return new Response(
+        JSON.stringify({
+          message: "Illustration resume started",
+          storyId,
+          startPage,
+          illustrationTarget,
+          functionVersion: FUNCTION_VERSION,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (mode === "continue_illustrations") {
+      const illustrationTarget = resolveDallePageLimit(
+        requestedTarget ?? requestedLimit,
+        PAGE_COUNT,
+      );
+
+      if (!storyId || !childId || !continueFromPage || !openaiKey) {
+        return new Response(JSON.stringify({ error: "Missing continue_illustrations params" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const authHeader = req.headers.get("Authorization");
+      const token = authHeader?.replace("Bearer ", "");
+      if (token !== supabaseServiceKey) {
+        logError("Request", "continue_illustrations rejected — service role required", { storyId });
+        return new Response(JSON.stringify({ error: "Forbidden" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      log("Request", "Continuing illustration batch (chained)", {
+        storyId, continueFromPage, illustrationTarget,
+      });
+
+      const continueRun = async () => {
+        try {
+          await continueIllustrationRun(
+            supabase, supabaseUrl, supabaseServiceKey, storyId, childId,
+            continueFromPage, illustrationTarget, openaiKey,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logError("Run", "Illustration batch failed", { storyId, continueFromPage, message });
+          await setStoryError(supabase, storyId, message, { stage: "chain", continueFromPage });
+        }
+      };
+
+      EdgeRuntime.waitUntil(continueRun());
+      return new Response(
+        JSON.stringify({
+          message: "Illustration batch started",
+          storyId,
+          continueFromPage,
+          illustrationTarget,
+          functionVersion: FUNCTION_VERSION,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     if (mode === "illustrate_next_batch") {
       if (!storyId || !openaiKey) {
@@ -1424,11 +1758,11 @@ Deno.serve(async (req) => {
 
       const batchRun = async () => {
         try {
-          await illustrateNextBatchRun(supabase, storyId, openaiKey);
+          await illustrateNextBatchRun(supabase, supabaseUrl, supabaseServiceKey, storyId, openaiKey);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logError("Run", "Manual illustration batch failed", { storyId, message });
-          await setStoryError(supabase, storyId, message);
+          await setStoryError(supabase, storyId, message, { stage: "manual_batch" });
         }
       };
 
@@ -1439,9 +1773,14 @@ Deno.serve(async (req) => {
       );
     }
 
-    const dallePageLimit = devMode ? 0 : resolveDallePageLimit(requestedLimit, PAGE_COUNT);
+    const illustrationTarget = devMode
+      ? 0
+      : resolveDallePageLimit(requestedTarget ?? requestedLimit, PAGE_COUNT);
+    const dallePageLimit = illustrationTarget;
 
-    log("Request", "Received", { storyId, childId, devMode, allowTemplate, dallePageLimit, inputCount: inputs?.length });
+    log("Request", "Received", {
+      storyId, childId, devMode, allowTemplate, illustrationTarget, inputCount: inputs?.length,
+    });
 
     if (!storyId || !childId || !inputs) {
       logError("Request", "Missing storyId, childId, or inputs");
@@ -1475,7 +1814,7 @@ Deno.serve(async (req) => {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logError("Run", "Generation failed — setting status=error", { storyId, message });
-        await setStoryError(supabase, storyId, message);
+        await setStoryError(supabase, storyId, message, { stage: "generation" });
       }
     };
 
@@ -1490,7 +1829,7 @@ Deno.serve(async (req) => {
       } catch (err) {
         generationError = err instanceof Error ? err.message : String(err);
         logError("Run", "Generation failed — setting status=error", { storyId, message: generationError });
-        await setStoryError(supabase, storyId, generationError);
+        await setStoryError(supabase, storyId, generationError, { stage: "generation" });
       }
       return new Response(
         JSON.stringify({
