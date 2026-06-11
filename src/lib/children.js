@@ -2,6 +2,15 @@ import { supabase } from '../lib/supabase'
 
 export const MAX_CHILDREN = 10
 
+export async function getChildById(childId) {
+  const { data, error } = await supabase
+    .from('children')
+    .select('id, name, birthday, gender')
+    .eq('id', childId)
+    .single()
+  return { data, error }
+}
+
 export async function getChildren(userId) {
   const { data, error } = await supabase
     .from('children')

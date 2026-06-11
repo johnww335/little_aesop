@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard'
 import Bookshelf from './pages/Bookshelf'
 import StoryPrompts from './pages/StoryPrompts'
 import GeneratingStory from './pages/GeneratingStory'
+import BedtimeRoutine from './pages/BedtimeRoutine'
 import StoryReader from './pages/StoryReader'
 
 const Protected = ({ children }) => <ProtectedRoute>{children}</ProtectedRoute>
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
           <Route path="/child/:childId/bookshelf" element={<Protected><Bookshelf /></Protected>} />
           <Route path="/child/:childId/prompts" element={<Protected><StoryPrompts /></Protected>} />
+          <Route path="/child/:childId/story/:storyId/bedtime" element={<Protected><BedtimeRoutine /></Protected>} />
           <Route path="/story/:storyId/generating" element={<Protected><GeneratingStory /></Protected>} />
           <Route path="/story/:storyId/read" element={<Protected><StoryReader /></Protected>} />
 

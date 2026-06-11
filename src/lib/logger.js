@@ -58,6 +58,25 @@ export function looksLikeTemplateStory(pages) {
   return hits >= 2
 }
 
+export function logGenerationProgress(storyId, snapshot, timing, health) {
+  log('GeneratingStory', 'Progress snapshot', {
+    storyId,
+    status: snapshot.status,
+    title: snapshot.title ?? null,
+    pagesInDb: snapshot.pagesInDb,
+    illustratedCount: snapshot.illustratedCount,
+    pagesCompletedCol: snapshot.pagesCompletedCol,
+    staleSec: Math.round(timing.staleMs / 1000),
+    elapsedMin: Math.round(timing.elapsedMs / 60000),
+    healthy: health.healthy,
+  })
+}
+
+/** Log when a story fails or stalls — search console for StoryFailure. */
+export function logStoryFailure(storyId, details) {
+  error('StoryFailure', 'Story generation problem', { storyId, ...details })
+}
+
 /** Log story architecture metadata (characters, plot, critic feedback). */
 export function logStoryMetadata(storyId, metadata) {
   if (!metadata) return
