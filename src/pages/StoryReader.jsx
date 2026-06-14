@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, forwardRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   getStoryWithPages,
@@ -29,9 +29,53 @@ export default function StoryReader() {
   const sparkledRef = useRef(new Set())
   const touchStartRef = useRef(null)
   const turnTimerRef = useRef(null)
+  const shellRef = useRef(null)
+  const preloadedImagesRef = useRef(null)
 
-  const exitFullscreen = useCallback(() => setFullscreen(false), [])
-  const toggleFullscreen = useCallback(() => setFullscreen(f => !f), [])
+  const exitNativeFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+      } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+        document.webkitExitFullscreen()
+      }
+    } catch {
+      // Browser may reject exit; CSS fallback still clears below
+    }
+  }, [])
+
+  const enterNativeFullscreen = useCallback(async (element) => {
+    if (!element) return false
+    try {
+      if (element.requestFullscreen) {
+        await element.requestFullscreen()
+        return true
+      }
+      if (element.webkitRequestFullscreen) {
+        element.webkitRequestFullscreen()
+        return true
+      }
+    } catch {
+      return false
+    }
+    return false
+  }, [])
+
+  const exitFullscreen = useCallback(async () => {
+    await exitNativeFullscreen()
+    setFullscreen(false)
+  }, [exitNativeFullscreen])
+
+  const toggleFullscreen = useCallback(async () => {
+    if (fullscreen) {
+      await exitFullscreen()
+      return
+    }
+    setFullscreen(true)
+    requestAnimationFrame(async () => {
+      await enterNativeFullscreen(shellRef.current)
+    })
+  }, [fullscreen, exitFullscreen, enterNativeFullscreen])
 
   const loadStory = async ({ showLoading = false } = {}) => {
     if (showLoading) setLoading(true)
@@ -60,15 +104,28 @@ export default function StoryReader() {
   }, [batchRunning, storyId])
 
   useEffect(() => {
-    setLoadedImages({})
-  }, [currentSpread])
-
-  useEffect(() => {
     sparkledRef.current = new Set()
     setSparklePages([])
   }, [storyId])
 
   const pages = story?.pages || []
+
+  useEffect(() => {
+    if (!story?.id || !pages.length) return
+    if (preloadedImagesRef.current === story.id) return
+    preloadedImagesRef.current = story.id
+
+    pages.forEach((p) => {
+      if (!p.image_url) return
+      const img = new Image()
+      const mark = () => {
+        setLoadedImages((prev) => (prev[p.page_number] ? prev : { ...prev, [p.page_number]: true }))
+      }
+      img.onload = mark
+      img.src = p.image_url
+      if (img.complete && img.naturalWidth > 0) mark()
+    })
+  }, [story?.id, pages])
   const pageCount = pages.length
   const placeholderCount = countPlaceholderPages(pages)
   const showDevButton = isDevAdmin(user) && placeholderCount > 0
@@ -163,6 +220,19 @@ export default function StoryReader() {
   }, [handleNext, handlePrev, fullscreen, exitFullscreen])
 
   useEffect(() => {
+    const syncFullscreen = () => {
+      const active = !!(document.fullscreenElement || document.webkitFullscreenElement)
+      if (!active) setFullscreen(false)
+    }
+    document.addEventListener('fullscreenchange', syncFullscreen)
+    document.addEventListener('webkitfullscreenchange', syncFullscreen)
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreen)
+      document.removeEventListener('webkitfullscreenchange', syncFullscreen)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!fullscreen) return undefined
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -171,9 +241,9 @@ export default function StoryReader() {
     }
   }, [fullscreen])
 
-  const markImageLoaded = (pageNum) => {
-    setLoadedImages(prev => ({ ...prev, [pageNum]: true }))
-  }
+  const markImageLoaded = useCallback((pageNum) => {
+    setLoadedImages((prev) => (prev[pageNum] ? prev : { ...prev, [pageNum]: true }))
+  }, [])
 
   if (loading) {
     return (
@@ -203,6 +273,7 @@ export default function StoryReader() {
 
   return (
     <ReaderShell
+      ref={shellRef}
       title={story.title}
       childId={story.child_id}
       fullscreen={fullscreen}
@@ -215,8 +286,7 @@ export default function StoryReader() {
           onTouchEnd={handleTouchEnd}
         >
           <div
-            className={`reader-book${turnDirection ? ` reader-book--turn-${turnDirection}` : ' reader-book--open'}`}
-            key={currentSpread}
+            className={`reader-book${turnDirection ? ` reader-book--turn-${turnDirection}` : ''}`}
           >
             <BookPagePanel
               page={leftPage}
@@ -308,6 +378,15 @@ export default function StoryReader() {
 }
 
 function BookPagePanel({ page, pageNum, side, loaded, onImageLoad, highlightPhrase, sparkleActive }) {
+  const imgRef = useRef(null)
+
+  useEffect(() => {
+    const img = imgRef.current
+    if (img?.complete && img.naturalWidth > 0) {
+      onImageLoad()
+    }
+  }, [page?.image_url, onImageLoad])
+
   if (!page) {
     return (
       <div className={`reader-page reader-page-${side} reader-page-empty`}>
@@ -321,11 +400,13 @@ function BookPagePanel({ page, pageNum, side, loaded, onImageLoad, highlightPhra
       <div className="reader-illustration">
         {page.image_url ? (
           <>
-            {!loaded && <div className="reader-spinner reader-spinner-sm" />}
+            {!loaded && <div className="reader-spinner reader-spinner-sm" aria-hidden="true" />}
             <img
+              ref={imgRef}
               src={page.image_url}
               alt={`Illustration for page ${pageNum}`}
               onLoad={onImageLoad}
+              decoding="async"
               className={`reader-image${loaded ? ' loaded' : ''}`}
             />
           </>
@@ -374,9 +455,15 @@ function NavButton({ onClick, disabled, label }) {
   )
 }
 
-function ReaderShell({ children, title, childId, fullscreen = false, onExitFullscreen }) {
+const ReaderShell = forwardRef(function ReaderShell(
+  { children, title, childId, fullscreen = false, onExitFullscreen },
+  ref,
+) {
   return (
-    <div className={`reader-shell${fullscreen ? ' reader-shell--fullscreen' : ''}`}>
+    <div
+      ref={ref}
+      className={`reader-shell${fullscreen ? ' reader-shell--fullscreen' : ''}`}
+    >
       {!fullscreen && <AppHeader title={title} childId={childId} />}
       {fullscreen && (
         <button
@@ -391,7 +478,7 @@ function ReaderShell({ children, title, childId, fullscreen = false, onExitFulls
       <main className="reader-main">{children}</main>
     </div>
   )
-}
+})
 
 const READER_STYLES = `
   .reader-shell {
@@ -412,6 +499,27 @@ const READER_STYLES = `
     background-image:
       radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* Native Fullscreen API — hides browser tabs/chrome when supported */
+  .reader-shell:fullscreen,
+  .reader-shell:-webkit-full-screen {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: none;
+    margin: 0;
+    background: #1a1208;
+    background-image:
+      radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  .reader-shell:fullscreen .reader-main,
+  .reader-shell:-webkit-full-screen .reader-main {
+    min-height: 100%;
+    height: 100%;
+    padding: 0;
   }
 
   .reader-shell--fullscreen .reader-main {
@@ -485,22 +593,18 @@ const READER_STYLES = `
 
   @keyframes pageTurnForward {
     from {
-      opacity: 0.55;
-      transform: perspective(1200px) rotateY(-6deg) translateX(28px);
+      transform: perspective(1200px) rotateY(-4deg) translateX(12px);
     }
     to {
-      opacity: 1;
       transform: perspective(1200px) rotateY(0deg) translateX(0);
     }
   }
 
   @keyframes pageTurnBack {
     from {
-      opacity: 0.55;
-      transform: perspective(1200px) rotateY(6deg) translateX(-28px);
+      transform: perspective(1200px) rotateY(4deg) translateX(-12px);
     }
     to {
-      opacity: 1;
       transform: perspective(1200px) rotateY(0deg) translateX(0);
     }
   }
@@ -671,8 +775,12 @@ const READER_STYLES = `
     height: 100%;
     object-fit: cover;
     border-radius: 3px;
+    opacity: 1;
+  }
+
+  .reader-image:not(.loaded) {
     opacity: 0;
-    transition: opacity 0.35s ease;
+    transition: opacity 0.2s ease;
   }
 
   .reader-image.loaded {

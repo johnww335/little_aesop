@@ -1,10 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { getRandomQuestions, validateInputs, createAndStartStory } from '../lib/stories'
 import { log, error as logError } from '../lib/logger'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
+
+function isLikelyIPad() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent
+  return /iPad/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua))
+}
+
+const IPAD_KEYBOARD_TIP_KEY = 'little-aesop-ipad-keyboard-tip-dismissed'
 
 export default function StoryPrompts() {
   const { childId } = useParams()
@@ -18,10 +26,36 @@ export default function StoryPrompts() {
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [currentStep, setCurrentStep] = useState(0)
+  const [showIpadKeyboardTip, setShowIpadKeyboardTip] = useState(false)
+  const answerRef = useRef(null)
+  const isIPad = isLikelyIPad()
+
+  useEffect(() => {
+    if (isIPad && !sessionStorage.getItem(IPAD_KEYBOARD_TIP_KEY)) {
+      setShowIpadKeyboardTip(true)
+    }
+  }, [isIPad])
+
+  useEffect(() => {
+    if (isIPad || !questions.length) return
+    answerRef.current?.focus()
+  }, [currentStep, isIPad, questions.length])
 
   useEffect(() => {
     loadQuestions()
   }, [])
+
+  const dismissIpadKeyboardTip = () => {
+    sessionStorage.setItem(IPAD_KEYBOARD_TIP_KEY, '1')
+    setShowIpadKeyboardTip(false)
+  }
+
+  const focusAnswer = () => {
+    const el = answerRef.current
+    if (!el) return
+    el.focus({ preventScroll: false })
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
 
   const loadQuestions = async () => {
     setLoading(true)
@@ -155,22 +189,45 @@ export default function StoryPrompts() {
               {questions[currentStep].prompt_text}
             </h2>
           </div>
+          {showIpadKeyboardTip && (
+            <div style={{
+              background: 'var(--warm-white)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px 14px',
+              marginBottom: 16,
+              fontSize: 13,
+              color: 'var(--ink-soft)',
+              lineHeight: 1.5,
+            }}>
+              <strong style={{ color: 'var(--ink)' }}>Small keyboard on iPad?</strong>
+              {' '}Drag the keyboard to the <strong>bottom edge</strong> of the screen to dock the full-size keyboard. You can also pinch outward on the keyboard to enlarge it.
+              <button
+                type="button"
+                onClick={dismissIpadKeyboardTip}
+                style={{ display: 'block', marginTop: 8, background: 'none', border: 'none', color: 'var(--gold)', fontWeight: 600, cursor: 'pointer', fontSize: 13, padding: 0 }}
+              >
+                Got it
+              </button>
+            </div>
+          )}
           <label htmlFor="story-answer" className="sr-only">
             Your answer to: {questions[currentStep].prompt_text}
           </label>
           <textarea
+            ref={answerRef}
             id="story-answer"
-            autoFocus
-            rows={3}
+            rows={isIPad ? 5 : 3}
             inputMode="text"
             enterKeyHint={isLastStep ? 'done' : 'next'}
             autoComplete="off"
             autoCorrect="on"
             autoCapitalize="sentences"
             spellCheck
-            placeholder="Type your answer here…"
+            placeholder="Tap here and type your answer…"
             value={answers[questions[currentStep].id] || ''}
             onChange={e => handleAnswer(questions[currentStep].id, e.target.value)}
+            onFocus={focusAnswer}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey && !isLastStep) {
                 e.preventDefault()
@@ -181,17 +238,17 @@ export default function StoryPrompts() {
             className="story-answer-input"
             style={{
               width: '100%',
-              padding: '14px 16px',
+              padding: '16px 18px',
               borderRadius: 'var(--radius-md)',
               border: `1.5px solid ${fieldErrors[questions[currentStep].id] ? 'var(--rose)' : 'var(--border-strong)'}`,
               background: 'var(--warm-white)',
-              fontSize: 18,
-              lineHeight: 1.45,
+              fontSize: isIPad ? 20 : 18,
+              lineHeight: 1.5,
               color: 'var(--ink)',
               outline: 'none',
               marginBottom: 4,
-              minHeight: 120,
-              resize: 'vertical',
+              minHeight: isIPad ? 160 : 120,
+              resize: 'none',
               WebkitAppearance: 'none',
             }}
           />
