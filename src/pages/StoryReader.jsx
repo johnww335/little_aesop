@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, forwardRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   getStoryWithPages,
@@ -11,6 +11,13 @@ import {
 } from '../lib/stories'
 import { useAuth } from '../contexts/AuthContext'
 import AppHeader from '../components/AppHeader'
+import {
+  supportsNativeElementFullscreen,
+  needsHomeScreenInstallForTrueFullscreen,
+  isStandalonePWA,
+} from '../lib/device'
+
+const IPAD_INSTALL_TIP_KEY = 'little-aesop-ipad-homescreen-tip-dismissed'
 
 export default function StoryReader() {
   const { storyId } = useParams()
@@ -24,14 +31,72 @@ export default function StoryReader() {
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchError, setBatchError] = useState('')
   const [fullscreen, setFullscreen] = useState(false)
+  const [showIpadInstallTip, setShowIpadInstallTip] = useState(false)
   const [turnDirection, setTurnDirection] = useState(null)
   const [sparklePages, setSparklePages] = useState([])
   const sparkledRef = useRef(new Set())
   const touchStartRef = useRef(null)
   const turnTimerRef = useRef(null)
+  const shellRef = useRef(null)
+  const preloadedImagesRef = useRef(null)
 
-  const exitFullscreen = useCallback(() => setFullscreen(false), [])
-  const toggleFullscreen = useCallback(() => setFullscreen(f => !f), [])
+  const exitNativeFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+      } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+        document.webkitExitFullscreen()
+      }
+    } catch {
+      // Browser may reject exit; CSS fallback still clears below
+    }
+  }, [])
+
+  const enterNativeFullscreen = useCallback(async (element) => {
+    if (!element) return false
+    try {
+      if (element.requestFullscreen) {
+        await element.requestFullscreen()
+        return true
+      }
+      if (element.webkitRequestFullscreen) {
+        element.webkitRequestFullscreen()
+        return true
+      }
+    } catch {
+      return false
+    }
+    return false
+  }, [])
+
+  const exitFullscreen = useCallback(async () => {
+    await exitNativeFullscreen()
+    setFullscreen(false)
+  }, [exitNativeFullscreen])
+
+  const toggleFullscreen = useCallback(async () => {
+    if (fullscreen) {
+      await exitFullscreen()
+      setShowIpadInstallTip(false)
+      return
+    }
+    setFullscreen(true)
+    if (supportsNativeElementFullscreen()) {
+      requestAnimationFrame(async () => {
+        await enterNativeFullscreen(shellRef.current)
+      })
+    } else if (
+      needsHomeScreenInstallForTrueFullscreen()
+      && !sessionStorage.getItem(IPAD_INSTALL_TIP_KEY)
+    ) {
+      setShowIpadInstallTip(true)
+    }
+  }, [fullscreen, exitFullscreen, enterNativeFullscreen])
+
+  const dismissIpadInstallTip = useCallback(() => {
+    sessionStorage.setItem(IPAD_INSTALL_TIP_KEY, '1')
+    setShowIpadInstallTip(false)
+  }, [])
 
   const loadStory = async ({ showLoading = false } = {}) => {
     if (showLoading) setLoading(true)
@@ -60,15 +125,28 @@ export default function StoryReader() {
   }, [batchRunning, storyId])
 
   useEffect(() => {
-    setLoadedImages({})
-  }, [currentSpread])
-
-  useEffect(() => {
     sparkledRef.current = new Set()
     setSparklePages([])
   }, [storyId])
 
   const pages = story?.pages || []
+
+  useEffect(() => {
+    if (!story?.id || !pages.length) return
+    if (preloadedImagesRef.current === story.id) return
+    preloadedImagesRef.current = story.id
+
+    pages.forEach((p) => {
+      if (!p.image_url) return
+      const img = new Image()
+      const mark = () => {
+        setLoadedImages((prev) => (prev[p.page_number] ? prev : { ...prev, [p.page_number]: true }))
+      }
+      img.onload = mark
+      img.src = p.image_url
+      if (img.complete && img.naturalWidth > 0) mark()
+    })
+  }, [story?.id, pages])
   const pageCount = pages.length
   const placeholderCount = countPlaceholderPages(pages)
   const showDevButton = isDevAdmin(user) && placeholderCount > 0
@@ -163,6 +241,19 @@ export default function StoryReader() {
   }, [handleNext, handlePrev, fullscreen, exitFullscreen])
 
   useEffect(() => {
+    const syncFullscreen = () => {
+      const active = !!(document.fullscreenElement || document.webkitFullscreenElement)
+      if (!active) setFullscreen(false)
+    }
+    document.addEventListener('fullscreenchange', syncFullscreen)
+    document.addEventListener('webkitfullscreenchange', syncFullscreen)
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreen)
+      document.removeEventListener('webkitfullscreenchange', syncFullscreen)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!fullscreen) return undefined
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -171,9 +262,9 @@ export default function StoryReader() {
     }
   }, [fullscreen])
 
-  const markImageLoaded = (pageNum) => {
-    setLoadedImages(prev => ({ ...prev, [pageNum]: true }))
-  }
+  const markImageLoaded = useCallback((pageNum) => {
+    setLoadedImages((prev) => (prev[pageNum] ? prev : { ...prev, [pageNum]: true }))
+  }, [])
 
   if (loading) {
     return (
@@ -201,13 +292,41 @@ export default function StoryReader() {
     ? `Pages ${leftPageNum}–${rightPageNum} of ${pageCount}`
     : `Page ${leftPageNum} of ${pageCount}`
 
+  const fullscreenBtnLabel = fullscreen
+    ? 'Exit full screen'
+    : needsHomeScreenInstallForTrueFullscreen()
+      ? 'Immersive mode'
+      : 'Full screen'
+
   return (
     <ReaderShell
+      ref={shellRef}
       title={story.title}
       childId={story.child_id}
       fullscreen={fullscreen}
       onExitFullscreen={exitFullscreen}
     >
+      {showIpadInstallTip && fullscreen && (
+        <div className="reader-ipad-install-tip" role="dialog" aria-labelledby="ipad-install-title">
+          <p id="ipad-install-title" className="reader-ipad-install-tip__title">
+            Want movie-style full screen?
+          </p>
+          <p className="reader-ipad-install-tip__body">
+            iPad browsers can&apos;t hide tabs from a website. For a truly full-screen story
+            (no address bar or tabs), add Little Aesop to your home screen:
+          </p>
+          <ol className="reader-ipad-install-tip__steps">
+            <li>Tap the <strong>Share</strong> button in Safari or Chrome</li>
+            <li>Choose <strong>Add to Home Screen</strong></li>
+            <li>Open <strong>Little Aesop</strong> from your home screen</li>
+          </ol>
+          <div className="reader-ipad-install-tip__actions">
+            <button type="button" className="reader-ipad-install-tip__btn" onClick={dismissIpadInstallTip}>
+              Continue in immersive mode
+            </button>
+          </div>
+        </div>
+      )}
       <div className={`reader-layout${fullscreen ? ' reader-layout--fullscreen' : ''}`}>
         <div
           className="reader-book-wrap"
@@ -215,8 +334,7 @@ export default function StoryReader() {
           onTouchEnd={handleTouchEnd}
         >
           <div
-            className={`reader-book${turnDirection ? ` reader-book--turn-${turnDirection}` : ' reader-book--open'}`}
-            key={currentSpread}
+            className={`reader-book${turnDirection ? ` reader-book--turn-${turnDirection}` : ''}`}
           >
             <BookPagePanel
               page={leftPage}
@@ -261,7 +379,7 @@ export default function StoryReader() {
             onClick={toggleFullscreen}
             aria-pressed={fullscreen}
           >
-            {fullscreen ? 'Exit full screen' : 'Full screen'}
+            {fullscreen ? 'Exit full screen' : fullscreenBtnLabel}
           </button>
 
           {isLast ? (
@@ -282,6 +400,7 @@ export default function StoryReader() {
         {fullscreen && (
           <p className="reader-hint reader-hint--fullscreen">
             Swipe left or right to turn pages
+            {needsHomeScreenInstallForTrueFullscreen() && ' · Add to Home Screen for no browser bars'}
           </p>
         )}
 
@@ -308,6 +427,15 @@ export default function StoryReader() {
 }
 
 function BookPagePanel({ page, pageNum, side, loaded, onImageLoad, highlightPhrase, sparkleActive }) {
+  const imgRef = useRef(null)
+
+  useEffect(() => {
+    const img = imgRef.current
+    if (img?.complete && img.naturalWidth > 0) {
+      onImageLoad()
+    }
+  }, [page?.image_url, onImageLoad])
+
   if (!page) {
     return (
       <div className={`reader-page reader-page-${side} reader-page-empty`}>
@@ -321,11 +449,13 @@ function BookPagePanel({ page, pageNum, side, loaded, onImageLoad, highlightPhra
       <div className="reader-illustration">
         {page.image_url ? (
           <>
-            {!loaded && <div className="reader-spinner reader-spinner-sm" />}
+            {!loaded && <div className="reader-spinner reader-spinner-sm" aria-hidden="true" />}
             <img
+              ref={imgRef}
               src={page.image_url}
               alt={`Illustration for page ${pageNum}`}
               onLoad={onImageLoad}
+              decoding="async"
               className={`reader-image${loaded ? ' loaded' : ''}`}
             />
           </>
@@ -374,9 +504,15 @@ function NavButton({ onClick, disabled, label }) {
   )
 }
 
-function ReaderShell({ children, title, childId, fullscreen = false, onExitFullscreen }) {
+const ReaderShell = forwardRef(function ReaderShell(
+  { children, title, childId, fullscreen = false, onExitFullscreen },
+  ref,
+) {
   return (
-    <div className={`reader-shell${fullscreen ? ' reader-shell--fullscreen' : ''}`}>
+    <div
+      ref={ref}
+      className={`reader-shell${fullscreen ? ' reader-shell--fullscreen' : ''}`}
+    >
       {!fullscreen && <AppHeader title={title} childId={childId} />}
       {fullscreen && (
         <button
@@ -391,7 +527,7 @@ function ReaderShell({ children, title, childId, fullscreen = false, onExitFulls
       <main className="reader-main">{children}</main>
     </div>
   )
-}
+})
 
 const READER_STYLES = `
   .reader-shell {
@@ -406,12 +542,90 @@ const READER_STYLES = `
     position: fixed;
     inset: 0;
     z-index: 1000;
+    width: 100%;
+    height: 100%;
     min-height: 100vh;
+    min-height: -webkit-fill-available;
     min-height: 100dvh;
     background: #1a1208;
     background-image:
       radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  .reader-ipad-install-tip {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 1003;
+    background: rgba(255, 252, 245, 0.97);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    text-align: left;
+  }
+
+  .reader-ipad-install-tip__title {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 8px;
+  }
+
+  .reader-ipad-install-tip__body {
+    font-size: 14px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+    margin: 0 0 10px;
+  }
+
+  .reader-ipad-install-tip__steps {
+    margin: 0 0 14px;
+    padding-left: 20px;
+    font-size: 14px;
+    color: var(--ink);
+    line-height: 1.55;
+  }
+
+  .reader-ipad-install-tip__actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .reader-ipad-install-tip__btn {
+    background: var(--ink);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--font-body);
+  }
+
+  /* Native Fullscreen API — hides browser tabs/chrome when supported */
+  .reader-shell:fullscreen,
+  .reader-shell:-webkit-full-screen {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: none;
+    margin: 0;
+    background: #1a1208;
+    background-image:
+      radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  .reader-shell:fullscreen .reader-main,
+  .reader-shell:-webkit-full-screen .reader-main {
+    min-height: 100%;
+    height: 100%;
+    padding: 0;
   }
 
   .reader-shell--fullscreen .reader-main {
@@ -485,22 +699,18 @@ const READER_STYLES = `
 
   @keyframes pageTurnForward {
     from {
-      opacity: 0.55;
-      transform: perspective(1200px) rotateY(-6deg) translateX(28px);
+      transform: perspective(1200px) rotateY(-4deg) translateX(12px);
     }
     to {
-      opacity: 1;
       transform: perspective(1200px) rotateY(0deg) translateX(0);
     }
   }
 
   @keyframes pageTurnBack {
     from {
-      opacity: 0.55;
-      transform: perspective(1200px) rotateY(6deg) translateX(-28px);
+      transform: perspective(1200px) rotateY(4deg) translateX(-12px);
     }
     to {
-      opacity: 1;
       transform: perspective(1200px) rotateY(0deg) translateX(0);
     }
   }
@@ -671,8 +881,12 @@ const READER_STYLES = `
     height: 100%;
     object-fit: cover;
     border-radius: 3px;
+    opacity: 1;
+  }
+
+  .reader-image:not(.loaded) {
     opacity: 0;
-    transition: opacity 0.35s ease;
+    transition: opacity 0.2s ease;
   }
 
   .reader-image.loaded {

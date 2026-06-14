@@ -5,6 +5,8 @@ import { getStoriesForChild, deleteStory, STORY_PAGE_COUNT, computeIllustrationP
 import { getChildren, getAvatarEmoji } from '../lib/children'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
+import OnboardingModal from '../components/OnboardingModal'
+import { useOnboarding, ONBOARDING_STEPS } from '../lib/onboarding'
 
 export default function Bookshelf() {
   const { childId } = useParams()
@@ -16,6 +18,12 @@ export default function Bookshelf() {
   const [error, setError] = useState('')
   const [storyToDelete, setStoryToDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
+
+  const { show: showBookshelfIntro, dismiss: dismissBookshelfIntro } = useOnboarding(
+    user?.id,
+    ONBOARDING_STEPS.BOOKSHELF,
+    !loading && !!child,
+  )
 
   useEffect(() => {
     loadData()
@@ -89,8 +97,15 @@ export default function Bookshelf() {
             </div>
             <div style={{ marginLeft: 'auto' }}>
               <Button
+                id="bookshelf-new-story-btn"
                 onClick={() => navigate(`/child/${childId}/prompts`)}
-                style={{ width: 'auto', padding: '10px 20px' }}
+                style={{
+                  width: 'auto',
+                  padding: '10px 20px',
+                  ...(showBookshelfIntro ? {
+                    boxShadow: '0 0 0 3px rgba(200,136,42,0.45)',
+                  } : {}),
+                }}
               >
                 ✨ New story
               </Button>
@@ -120,6 +135,20 @@ export default function Bookshelf() {
           </div>
         )}
       </main>
+
+      {showBookshelfIntro && child && (
+        <OnboardingModal
+          title={`${child.name}'s bookshelf`}
+          onDismiss={dismissBookshelfIntro}
+          dismissLabel="Got it"
+        >
+          <p style={{ margin: 0 }}>
+            This is where all of <strong>{child.name}</strong>&apos;s stories live — finished books
+            and ones still being written. Tap <strong>New story</strong> (highlighted above) to
+            create your first personalized adventure.
+          </p>
+        </OnboardingModal>
+      )}
 
       {storyToDelete && (
         <DeleteStoryModal

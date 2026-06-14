@@ -31,6 +31,7 @@ import {
   logImageDiagnostics,
 } from '../lib/logger'
 import AppHeader from '../components/AppHeader'
+import { STORY_CREATION_ESTIMATE_MINUTES } from '../lib/onboarding'
 
 const POLL_INTERVAL = 5000
 const GENERATING_HEARTBEAT_POLLS = 12 // log every ~60s while status unchanged
@@ -420,7 +421,7 @@ export default function GeneratingStory() {
         </div>
 
         <p style={{ fontSize: 13, color: 'var(--ink-muted)', marginBottom: 16 }}>
-          Illustrating all {illustrationTarget} pages (~20–40 min). You can leave and come back!
+          Illustrating all {illustrationTarget} pages (about {STORY_CREATION_ESTIMATE_MINUTES} min). You can leave and come back!
         </p>
 
         {deployWarning && (
