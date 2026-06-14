@@ -3,6 +3,13 @@ import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
 
+/** Production Site URL for auth emails — set VITE_APP_URL in Vercel so links never point at localhost. */
+function getAppOrigin() {
+  const configured = import.meta.env.VITE_APP_URL?.trim().replace(/\/$/, '')
+  if (configured) return configured
+  return window.location.origin
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -22,7 +29,7 @@ export function AuthProvider({ children }) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: `${window.location.origin}/verify` }
+      options: { emailRedirectTo: `${getAppOrigin()}/verify` }
     })
     return { data, error }
   }
@@ -38,7 +45,7 @@ export function AuthProvider({ children }) {
 
   const resetPassword = async (email) => {
     const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`
+      redirectTo: `${getAppOrigin()}/reset-password`
     })
     return { data, error }
   }
