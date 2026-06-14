@@ -155,24 +155,44 @@ export default function StoryPrompts() {
               {questions[currentStep].prompt_text}
             </h2>
           </div>
-          <input
+          <label htmlFor="story-answer" className="sr-only">
+            Your answer to: {questions[currentStep].prompt_text}
+          </label>
+          <textarea
+            id="story-answer"
             autoFocus
-            type="text"
+            rows={3}
+            inputMode="text"
+            enterKeyHint={isLastStep ? 'done' : 'next'}
+            autoComplete="off"
+            autoCorrect="on"
+            autoCapitalize="sentences"
+            spellCheck
             placeholder="Type your answer here…"
             value={answers[questions[currentStep].id] || ''}
             onChange={e => handleAnswer(questions[currentStep].id, e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && (isLastStep ? null : handleNext())}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && !isLastStep) {
+                e.preventDefault()
+                handleNext()
+              }
+            }}
             maxLength={100}
+            className="story-answer-input"
             style={{
               width: '100%',
               padding: '14px 16px',
               borderRadius: 'var(--radius-md)',
               border: `1.5px solid ${fieldErrors[questions[currentStep].id] ? 'var(--rose)' : 'var(--border-strong)'}`,
               background: 'var(--warm-white)',
-              fontSize: 17,
+              fontSize: 18,
+              lineHeight: 1.45,
               color: 'var(--ink)',
               outline: 'none',
-              marginBottom: 4
+              marginBottom: 4,
+              minHeight: 120,
+              resize: 'vertical',
+              WebkitAppearance: 'none',
             }}
           />
           {fieldErrors[questions[currentStep].id] && (
@@ -242,6 +262,12 @@ export default function StoryPrompts() {
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
+        /* iPad Safari: taller text field + 18px font encourages the docked full keyboard */
+        .story-answer-input {
+          touch-action: manipulation;
+          -webkit-user-select: text;
+          user-select: text;
+        }
       `}</style>
     </PageShell>
   )

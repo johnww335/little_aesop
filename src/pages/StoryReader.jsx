@@ -24,8 +24,11 @@ export default function StoryReader() {
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchError, setBatchError] = useState('')
   const [fullscreen, setFullscreen] = useState(false)
+  const [turnDirection, setTurnDirection] = useState(null)
   const [sparklePages, setSparklePages] = useState([])
   const sparkledRef = useRef(new Set())
+  const touchStartRef = useRef(null)
+  const turnTimerRef = useRef(null)
 
   const exitFullscreen = useCallback(() => setFullscreen(false), [])
   const toggleFullscreen = useCallback(() => setFullscreen(f => !f), [])
@@ -107,12 +110,44 @@ export default function StoryReader() {
   }, [currentSpread, story?.story_metadata, leftPageNum, rightPageNum, pageCount])
 
   const handlePrev = useCallback(() => {
+    setTurnDirection('back')
     setCurrentSpread(s => Math.max(0, s - 1))
   }, [])
 
   const handleNext = useCallback(() => {
+    setTurnDirection('forward')
     setCurrentSpread(s => Math.min(spreadCount - 1, s + 1))
   }, [spreadCount])
+
+  useEffect(() => {
+    if (!turnDirection) return undefined
+    if (turnTimerRef.current) clearTimeout(turnTimerRef.current)
+    turnTimerRef.current = setTimeout(() => setTurnDirection(null), 380)
+    return () => {
+      if (turnTimerRef.current) clearTimeout(turnTimerRef.current)
+    }
+  }, [currentSpread, turnDirection])
+
+  const handleTouchStart = useCallback((e) => {
+    const t = e.touches[0]
+    touchStartRef.current = { x: t.clientX, y: t.clientY }
+  }, [])
+
+  const handleTouchEnd = useCallback((e) => {
+    const start = touchStartRef.current
+    touchStartRef.current = null
+    if (!start) return
+
+    const t = e.changedTouches[0]
+    const dx = t.clientX - start.x
+    const dy = t.clientY - start.y
+    const minSwipe = 48
+
+    if (Math.abs(dx) < minSwipe || Math.abs(dx) < Math.abs(dy) * 1.2) return
+
+    if (dx < 0 && !isLast) handleNext()
+    else if (dx > 0 && !isFirst) handlePrev()
+  }, [handleNext, handlePrev, isFirst, isLast])
 
   useEffect(() => {
     const handler = (e) => {
@@ -173,9 +208,16 @@ export default function StoryReader() {
       fullscreen={fullscreen}
       onExitFullscreen={exitFullscreen}
     >
-      <div className="reader-layout">
-        <div className="reader-book-wrap">
-          <div className="reader-book" key={currentSpread}>
+      <div className={`reader-layout${fullscreen ? ' reader-layout--fullscreen' : ''}`}>
+        <div
+          className="reader-book-wrap"
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div
+            className={`reader-book${turnDirection ? ` reader-book--turn-${turnDirection}` : ' reader-book--open'}`}
+            key={currentSpread}
+          >
             <BookPagePanel
               page={leftPage}
               pageNum={leftPageNum}
@@ -200,7 +242,7 @@ export default function StoryReader() {
           </div>
         </div>
 
-        <div className="reader-nav">
+        <div className={`reader-nav${fullscreen ? ' reader-nav--overlay' : ''}`}>
           <NavButton onClick={handlePrev} disabled={isFirst} label="← Previous" />
 
           <div className="reader-progress">
@@ -231,12 +273,19 @@ export default function StoryReader() {
           )}
         </div>
 
-        <p className="reader-hint">
-          {fullscreen ? 'Press Esc to exit full screen · ' : ''}
-          Use ← → arrow keys to turn pages
-        </p>
+        {!fullscreen && (
+          <p className="reader-hint">
+            Use ← → arrow keys or swipe to turn pages
+          </p>
+        )}
 
-        {showDevButton && (
+        {fullscreen && (
+          <p className="reader-hint reader-hint--fullscreen">
+            Swipe left or right to turn pages
+          </p>
+        )}
+
+        {showDevButton && !fullscreen && (
           <div className="reader-dev-bar">
             <button
               type="button"
@@ -359,23 +408,107 @@ const READER_STYLES = `
     z-index: 1000;
     min-height: 100vh;
     min-height: 100dvh;
+    background: #1a1208;
+    background-image:
+      radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
 
   .reader-shell--fullscreen .reader-main {
-    min-height: 100vh;
-    min-height: 100dvh;
-    padding: 12px 20px 20px;
+    min-height: 100%;
+    height: 100%;
+    padding: 0;
+    justify-content: stretch;
+  }
+
+  .reader-layout--fullscreen {
+    max-width: none;
+    width: 100%;
+    height: 100%;
+    gap: 0;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .reader-shell--fullscreen .reader-book-wrap {
+    flex: 1;
+    width: 100%;
+    padding: 8px 6px 88px;
+    touch-action: pan-y pinch-zoom;
   }
 
   .reader-shell--fullscreen .reader-book {
-    height: min(calc(100vh - 140px), calc(100dvh - 140px), 820px);
+    width: 100%;
+    height: 100%;
     max-height: none;
+    min-height: 0;
+    border-radius: 4px 8px 8px 4px;
+    box-shadow:
+      0 40px 100px rgba(0,0,0,0.45),
+      0 12px 32px rgba(0,0,0,0.25),
+      inset 0 0 0 1px rgba(255,252,245,0.06);
   }
 
-  .reader-shell--fullscreen .reader-layout {
+  .reader-nav--overlay {
+    position: fixed;
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    z-index: 1002;
     max-width: none;
-    height: 100%;
-    justify-content: center;
+    padding: 10px 14px;
+    background: rgba(255, 252, 245, 0.94);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(8px);
+  }
+
+  .reader-hint--fullscreen {
+    position: fixed;
+    bottom: max(72px, calc(env(safe-area-inset-bottom) + 62px));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1001;
+    color: rgba(255, 252, 245, 0.55);
+    font-size: 11px;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  .reader-book--turn-forward {
+    animation: pageTurnForward 0.38s ease-out;
+  }
+
+  .reader-book--turn-back {
+    animation: pageTurnBack 0.38s ease-out;
+  }
+
+  @keyframes pageTurnForward {
+    from {
+      opacity: 0.55;
+      transform: perspective(1200px) rotateY(-6deg) translateX(28px);
+    }
+    to {
+      opacity: 1;
+      transform: perspective(1200px) rotateY(0deg) translateX(0);
+    }
+  }
+
+  @keyframes pageTurnBack {
+    from {
+      opacity: 0.55;
+      transform: perspective(1200px) rotateY(6deg) translateX(-28px);
+    }
+    to {
+      opacity: 1;
+      transform: perspective(1200px) rotateY(0deg) translateX(0);
+    }
+  }
+
+  .reader-shell--fullscreen .reader-exit-fullscreen {
+    top: max(10px, env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
+    background: rgba(255, 252, 245, 0.92);
   }
 
   .reader-exit-fullscreen {
@@ -438,6 +571,7 @@ const READER_STYLES = `
     align-items: center;
     justify-content: center;
     min-height: 0;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .reader-book {
@@ -452,8 +586,11 @@ const READER_STYLES = `
       0 28px 70px rgba(44,26,14,0.16),
       0 10px 24px rgba(44,26,14,0.08),
       inset 0 0 0 1px rgba(44,26,14,0.07);
-    animation: bookOpen 0.35s ease;
     overflow: hidden;
+  }
+
+  .reader-book--open {
+    animation: bookOpen 0.35s ease;
   }
 
   @keyframes bookOpen {
@@ -777,6 +914,15 @@ const READER_STYLES = `
     .reader-book {
       height: min(68vh, 560px);
       min-height: 360px;
+    }
+
+    .reader-shell--fullscreen .reader-book {
+      height: 100%;
+      min-height: 0;
+    }
+
+    .reader-shell--fullscreen .reader-book-wrap {
+      padding-bottom: 72px;
     }
 
     .reader-illustration {
