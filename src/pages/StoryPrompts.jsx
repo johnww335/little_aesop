@@ -5,6 +5,13 @@ import { getRandomQuestions, validateInputs, createAndStartStory } from '../lib/
 import { log, error as logError } from '../lib/logger'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
+import OnboardingModal from '../components/OnboardingModal'
+import { getChildById } from '../lib/children'
+import {
+  useOnboarding,
+  ONBOARDING_STEPS,
+  STORY_CREATION_ESTIMATE_MINUTES,
+} from '../lib/onboarding'
 
 function isLikelyIPad() {
   if (typeof navigator === 'undefined') return false
@@ -27,8 +34,22 @@ export default function StoryPrompts() {
   const [fieldErrors, setFieldErrors] = useState({})
   const [currentStep, setCurrentStep] = useState(0)
   const [showIpadKeyboardTip, setShowIpadKeyboardTip] = useState(false)
+  const [childName, setChildName] = useState('')
   const answerRef = useRef(null)
   const isIPad = isLikelyIPad()
+
+  const { show: showNewStoryIntro, dismiss: dismissNewStoryIntro } = useOnboarding(
+    user?.id,
+    ONBOARDING_STEPS.NEW_STORY,
+    !loading && questions.length > 0,
+  )
+
+  useEffect(() => {
+    if (!childId) return
+    getChildById(childId).then(({ data }) => {
+      if (data?.name) setChildName(data.name)
+    })
+  }, [childId])
 
   useEffect(() => {
     if (isIPad && !sessionStorage.getItem(IPAD_KEYBOARD_TIP_KEY)) {
@@ -149,7 +170,23 @@ export default function StoryPrompts() {
   }
 
   return (
-    <PageShell childId={childId}>
+    <>
+      {showNewStoryIntro && (
+        <OnboardingModal title="Let's build a story" onDismiss={dismissNewStoryIntro}>
+          <p style={{ marginBottom: 12 }}>
+            You&apos;ll answer a few quick questions about{' '}
+            <strong>{childName || 'your child'}</strong>&apos;s interests. We use your answers to
+            write and illustrate a one-of-a-kind bedtime story starring them.
+          </p>
+          <p style={{ margin: 0 }}>
+            After you submit, give us about <strong>{STORY_CREATION_ESTIMATE_MINUTES} minutes</strong>{' '}
+            to write the story and paint all the pictures. You can watch the progress screen or
+            come back later — we&apos;ll keep working in the background.
+          </p>
+        </OnboardingModal>
+      )}
+
+      <PageShell childId={childId}>
       {/* Progress bar */}
       <div style={{ marginBottom: 36 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -326,7 +363,8 @@ export default function StoryPrompts() {
           user-select: text;
         }
       `}</style>
-    </PageShell>
+      </PageShell>
+    </>
   )
 }
 

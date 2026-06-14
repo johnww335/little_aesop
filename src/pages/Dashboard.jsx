@@ -5,6 +5,8 @@ import { getChildren, createChild, deleteChild, calculateAge, getAvatarEmoji, MA
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
 import AddChildModal from '../components/AddChildModal'
+import OnboardingModal from '../components/OnboardingModal'
+import { useOnboarding, ONBOARDING_STEPS } from '../lib/onboarding'
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
@@ -14,6 +16,12 @@ export default function Dashboard() {
   const [showModal, setShowModal] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
+
+  const { show: showWelcome, dismiss: dismissWelcome } = useOnboarding(
+    user?.id,
+    ONBOARDING_STEPS.WELCOME,
+    !loading,
+  )
 
   useEffect(() => {
     loadChildren()
@@ -139,6 +147,18 @@ export default function Dashboard() {
           </p>
         )}
       </main>
+
+      {showWelcome && (
+        <OnboardingModal title="Welcome to Little Aesop!" onDismiss={dismissWelcome}>
+          <p style={{ marginBottom: 12 }}>
+            Little Aesop creates personalized bedtime stories for your children. You answer a few
+            fun questions, and we write and illustrate a unique story just for them.
+          </p>
+          <p style={{ margin: 0 }}>
+            Start by adding a child profile below, then open their bookshelf to create your first story.
+          </p>
+        </OnboardingModal>
+      )}
 
       {showModal && (
         <AddChildModal

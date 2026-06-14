@@ -4,6 +4,7 @@ import { getStoryProgress, resumeStoryIllustration, getIllustrationTargetFromEnv
 import { getChildById } from '../lib/children'
 import { Button } from '../components/ui'
 import AppHeader from '../components/AppHeader'
+import { STORY_CREATION_ESTIMATE_MINUTES } from '../lib/onboarding'
 
 const ROUTINE_STEPS = [
   { emoji: '🦷', label: 'Brush your teeth' },
@@ -161,7 +162,7 @@ export default function BedtimeRoutine() {
         </Button>
 
         <p style={{ fontSize: 13, color: 'var(--ink-muted)', marginTop: 20, lineHeight: 1.5 }}>
-          No rush — your story will open automatically when every page is illustrated.
+          No rush — your story should be ready in about {STORY_CREATION_ESTIMATE_MINUTES} minutes and will open automatically when every page is illustrated.
         </p>
       </main>
     </div>

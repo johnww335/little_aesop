@@ -1,0 +1,18 @@
+{
+  "name": "Little Aesop",
+  "short_name": "Little Aesop",
+  "description": "Personalized bedtime stories for children",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1a1208",
+  "theme_color": "#2C1A0E",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

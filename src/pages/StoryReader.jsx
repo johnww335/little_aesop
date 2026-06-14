@@ -11,6 +11,13 @@ import {
 } from '../lib/stories'
 import { useAuth } from '../contexts/AuthContext'
 import AppHeader from '../components/AppHeader'
+import {
+  supportsNativeElementFullscreen,
+  needsHomeScreenInstallForTrueFullscreen,
+  isStandalonePWA,
+} from '../lib/device'
+
+const IPAD_INSTALL_TIP_KEY = 'little-aesop-ipad-homescreen-tip-dismissed'
 
 export default function StoryReader() {
   const { storyId } = useParams()
@@ -24,6 +31,7 @@ export default function StoryReader() {
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchError, setBatchError] = useState('')
   const [fullscreen, setFullscreen] = useState(false)
+  const [showIpadInstallTip, setShowIpadInstallTip] = useState(false)
   const [turnDirection, setTurnDirection] = useState(null)
   const [sparklePages, setSparklePages] = useState([])
   const sparkledRef = useRef(new Set())
@@ -69,13 +77,26 @@ export default function StoryReader() {
   const toggleFullscreen = useCallback(async () => {
     if (fullscreen) {
       await exitFullscreen()
+      setShowIpadInstallTip(false)
       return
     }
     setFullscreen(true)
-    requestAnimationFrame(async () => {
-      await enterNativeFullscreen(shellRef.current)
-    })
+    if (supportsNativeElementFullscreen()) {
+      requestAnimationFrame(async () => {
+        await enterNativeFullscreen(shellRef.current)
+      })
+    } else if (
+      needsHomeScreenInstallForTrueFullscreen()
+      && !sessionStorage.getItem(IPAD_INSTALL_TIP_KEY)
+    ) {
+      setShowIpadInstallTip(true)
+    }
   }, [fullscreen, exitFullscreen, enterNativeFullscreen])
+
+  const dismissIpadInstallTip = useCallback(() => {
+    sessionStorage.setItem(IPAD_INSTALL_TIP_KEY, '1')
+    setShowIpadInstallTip(false)
+  }, [])
 
   const loadStory = async ({ showLoading = false } = {}) => {
     if (showLoading) setLoading(true)
@@ -271,6 +292,12 @@ export default function StoryReader() {
     ? `Pages ${leftPageNum}–${rightPageNum} of ${pageCount}`
     : `Page ${leftPageNum} of ${pageCount}`
 
+  const fullscreenBtnLabel = fullscreen
+    ? 'Exit full screen'
+    : needsHomeScreenInstallForTrueFullscreen()
+      ? 'Immersive mode'
+      : 'Full screen'
+
   return (
     <ReaderShell
       ref={shellRef}
@@ -279,6 +306,27 @@ export default function StoryReader() {
       fullscreen={fullscreen}
       onExitFullscreen={exitFullscreen}
     >
+      {showIpadInstallTip && fullscreen && (
+        <div className="reader-ipad-install-tip" role="dialog" aria-labelledby="ipad-install-title">
+          <p id="ipad-install-title" className="reader-ipad-install-tip__title">
+            Want movie-style full screen?
+          </p>
+          <p className="reader-ipad-install-tip__body">
+            iPad browsers can&apos;t hide tabs from a website. For a truly full-screen story
+            (no address bar or tabs), add Little Aesop to your home screen:
+          </p>
+          <ol className="reader-ipad-install-tip__steps">
+            <li>Tap the <strong>Share</strong> button in Safari or Chrome</li>
+            <li>Choose <strong>Add to Home Screen</strong></li>
+            <li>Open <strong>Little Aesop</strong> from your home screen</li>
+          </ol>
+          <div className="reader-ipad-install-tip__actions">
+            <button type="button" className="reader-ipad-install-tip__btn" onClick={dismissIpadInstallTip}>
+              Continue in immersive mode
+            </button>
+          </div>
+        </div>
+      )}
       <div className={`reader-layout${fullscreen ? ' reader-layout--fullscreen' : ''}`}>
         <div
           className="reader-book-wrap"
@@ -331,7 +379,7 @@ export default function StoryReader() {
             onClick={toggleFullscreen}
             aria-pressed={fullscreen}
           >
-            {fullscreen ? 'Exit full screen' : 'Full screen'}
+            {fullscreen ? 'Exit full screen' : fullscreenBtnLabel}
           </button>
 
           {isLast ? (
@@ -352,6 +400,7 @@ export default function StoryReader() {
         {fullscreen && (
           <p className="reader-hint reader-hint--fullscreen">
             Swipe left or right to turn pages
+            {needsHomeScreenInstallForTrueFullscreen() && ' · Add to Home Screen for no browser bars'}
           </p>
         )}
 
@@ -493,12 +542,69 @@ const READER_STYLES = `
     position: fixed;
     inset: 0;
     z-index: 1000;
+    width: 100%;
+    height: 100%;
     min-height: 100vh;
+    min-height: -webkit-fill-available;
     min-height: 100dvh;
     background: #1a1208;
     background-image:
       radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  .reader-ipad-install-tip {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 1003;
+    background: rgba(255, 252, 245, 0.97);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    text-align: left;
+  }
+
+  .reader-ipad-install-tip__title {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 8px;
+  }
+
+  .reader-ipad-install-tip__body {
+    font-size: 14px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+    margin: 0 0 10px;
+  }
+
+  .reader-ipad-install-tip__steps {
+    margin: 0 0 14px;
+    padding-left: 20px;
+    font-size: 14px;
+    color: var(--ink);
+    line-height: 1.55;
+  }
+
+  .reader-ipad-install-tip__actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .reader-ipad-install-tip__btn {
+    background: var(--ink);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--font-body);
   }
 
   /* Native Fullscreen API — hides browser tabs/chrome when supported */
