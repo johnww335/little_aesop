@@ -220,11 +220,12 @@ Rules:
 - Make it genuinely enjoyable for a ${context.childAge}-year-old: warm, playful, surprising, and fun to read aloud
 - Weave each child ANSWER below into the plot as story events — the answers are ingredients, not dialogue to recite
 - NEVER quote or mention the original prompt questions in the story text
-- NEVER write Q&A style lines like 'They wondered: "..."' or '"mouse!" they shouted'
-- The story must read like a normal published children's book — answers appear naturally (a mouse in a scene, Mars as a destination, etc.)
+- NEVER write Q&A style lines like 'They wondered: "..."' or '"pizza!" they shouted'
+- The story must read like a normal published children's book — answers appear naturally (a robot in a scene, the ocean as a destination, etc.)
 - NEVER write filler like "Everyone agreed that X made the day memorable" or "X turned out to be the surprise"
 - Each answer should inspire a concrete scene, action, character, place, or object — not be pasted as a bare noun
-- Example for answers mouse, Mars, trumpet: GOOD: "A tiny mouse scampered over the giant's boot." BAD: "The path led toward mouse."
+- Example for answers robot, ocean, balloon: GOOD: "A friendly robot rolled across the sandy shore." BAD: "The path led toward ocean."
+- Use ONLY the child's actual answers in the story — never copy animals, objects, or places from these instructions or examples
 - Pages must be unique — do NOT repeat sentences across pages
 - Structure: beginning (pages 1-5), middle (pages 6-15), end (pages 16-20)
 - Return ONLY JSON: { "title": "Story Title", "pages": ["page 1", "page 2", ...] }
