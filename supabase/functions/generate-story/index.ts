@@ -2,7 +2,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const LOG = "[generate-story]";
-const FUNCTION_VERSION = "2025-06-19";
+const FUNCTION_VERSION = "2026-06-11";
 const IMAGE_BATCH_SIZE = 5;
 /** Chained auto-runs use one page per edge invocation to stay within wall-clock limits. */
 const CHAIN_PAGE_SIZE = 1;
@@ -28,10 +28,20 @@ const IMAGE_BUCKET = "story-images";
 const MAX_RETRIES = 1;
 const MAX_QUALITY_ATTEMPTS = 3;
 const PAGE_COUNT = 20;
+/** How many past stories to scan for critic lessons (Phase A feedback loop). */
+const PRIOR_STORY_FEEDBACK_LIMIT = 3;
+/** Stories rated below this contribute improvements to the next generation. */
+const CRITIC_LESSONS_RATING_THRESHOLD = 80;
 
 type StoryInput = { question: string; answer: string };
 type StoryDraft = { title: string; pages: string[] };
-type StoryContext = { childName: string; childAge: number; revisionFeedback?: string };
+type StoryContext = {
+  childName: string;
+  childAge: number;
+  revisionFeedback?: string;
+  /** Lessons distilled from this child's past story metadata (Phase A). */
+  priorStoryLessons?: string;
+};
 type StoryReview = {
   passes: boolean;
   makesSense: boolean;
@@ -121,6 +131,68 @@ async function fetchChild(
   return context;
 }
 
+type PriorStoryRow = {
+  id: string;
+  title: string | null;
+  story_metadata: StoryMetadata | null;
+};
+
+async function fetchPriorStoryFeedback(
+  supabase: ReturnType<typeof createClient>,
+  childId: string,
+  excludeStoryId?: string,
+): Promise<PriorStoryRow[]> {
+  const { data, error } = await supabase
+    .from("stories")
+    .select("id, title, story_metadata")
+    .eq("child_id", childId)
+    .eq("status", "ready")
+    .not("story_metadata", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(PRIOR_STORY_FEEDBACK_LIMIT + (excludeStoryId ? 1 : 0));
+
+  if (error) {
+    logError("Feedback", "Could not load prior story metadata — skipping lessons", {
+      childId,
+      message: error.message,
+    });
+    return [];
+  }
+
+  const rows = (data ?? []) as PriorStoryRow[];
+  return excludeStoryId ? rows.filter((r) => r.id !== excludeStoryId).slice(0, PRIOR_STORY_FEEDBACK_LIMIT) : rows;
+}
+
+/** Turn past criticFeedback into prompt instructions for the next story. */
+function buildPriorStoryLessons(priorStories: PriorStoryRow[]): string | undefined {
+  const lines: string[] = [];
+
+  for (const row of priorStories) {
+    const critic = row.story_metadata?.criticFeedback;
+    if (!critic) continue;
+
+    const weakRating = critic.rating < CRITIC_LESSONS_RATING_THRESHOLD;
+    const awkwardInputs = critic.inputsFitNaturally === "items_feel_out_of_place";
+    if (!weakRating && !awkwardInputs) continue;
+
+    const label = row.title?.trim() || "Untitled story";
+    const parts: string[] = [`From "${label}" (critic score ${critic.rating}/100):`];
+    if (critic.faults?.trim()) parts.push(`Problems: ${critic.faults.trim()}`);
+    if (critic.improvements?.trim()) parts.push(`Do better: ${critic.improvements.trim()}`);
+    if (awkwardInputs) {
+      parts.push("Child answers felt pasted in — weave each answer as a concrete scene or action, not a bare noun.");
+    }
+    lines.push(parts.join(" "));
+  }
+
+  if (!lines.length) return undefined;
+
+  return [
+    "Lessons from this child's recent stories — avoid repeating these mistakes:",
+    ...lines.map((l, i) => `${i + 1}. ${l}`),
+  ].join("\n");
+}
+
 function ageWritingGuide(age: number): string {
   if (age <= 3) return "Use very simple words, short sentences, and gentle repetition.";
   if (age <= 6) return "Use simple sentences, playful tone, and concrete imagery.";
@@ -134,6 +206,10 @@ function buildStorySystemPrompt(context: StoryContext, qualityAttempt: number): 
     : qualityAttempt === 2
       ? "\n\nIMPORTANT — the previous draft failed review. Write one clear linear adventure: setup (pages 1-5), rising action (6-15), satisfying ending (16-20). Every page must follow logically from the last and feel fun to read aloud."
       : "\n\nCRITICAL — multiple drafts failed review. Keep the plot simple: one hero, one journey, one problem to solve. Use vivid concrete scenes on every page. No filler or repetitive sentences. Make each page something a child would love.";
+
+  const priorLessons = context.priorStoryLessons
+    ? `\n\nApply these lessons from ${context.childName}'s past stories:\n${context.priorStoryLessons}`
+    : "";
 
   return `You are a children's book author writing for ${context.childName}, who is ${context.childAge} years old.
 ${ageWritingGuide(context.childAge)}
@@ -152,7 +228,7 @@ Rules:
 - Pages must be unique — do NOT repeat sentences across pages
 - Structure: beginning (pages 1-5), middle (pages 6-15), end (pages 16-20)
 - Return ONLY JSON: { "title": "Story Title", "pages": ["page 1", "page 2", ...] }
-- The pages array must contain exactly ${PAGE_COUNT} strings${escalation}`;
+- The pages array must contain exactly ${PAGE_COUNT} strings${escalation}${priorLessons}`;
 }
 
 function buildRevisionFeedback(
@@ -370,7 +446,7 @@ async function buildStoryMetadata(
       messages: [
         {
           role: "system",
-          content: `You are a professional children's book critic and art director analyzing a story for ${context.childName}, age ${context.childAge}.
+          content: `You are a demanding children's book editor and art director reviewing a manuscript for ${context.childName}, age ${context.childAge}. Your job is to find weaknesses — not to encourage the author. Be blunt, specific, and tough. Most AI-generated bedtime stories are mediocre (55–72). Only rate 83+ if you would genuinely recommend this to a parent. Reserve 90+ for exceptional, publishable quality.
 
 Return ONLY JSON with this exact structure:
 {
@@ -396,14 +472,32 @@ Return ONLY JSON with this exact structure:
   "paletteNotes": "3-5 dominant colors and art mood"
 }
 
+Scoring guide (use the full range — do NOT cluster at 80–90):
+- 90–100: Exceptional — tight plot, every page earns its place, inputs woven brilliantly, would delight a ${context.childAge}-year-old
+- 75–89: Solid but flawed — enjoyable with clear weaknesses worth fixing
+- 55–74: Mediocre — filler, weak middle, disconnected beats, or forced inputs
+- Below 55: Poor — incoherent, repetitive, or answers pasted unnaturally
+
+Penalize heavily for:
+- Disconnected or random scenes with no clear through-line
+- Repetitive sentences or recycled phrasing across pages
+- Child answers used as bare nouns ("they walked toward Mars") instead of concrete scenes
+- Filler lines like "Everyone agreed that X made the day memorable"
+- Weak or rushed ending; no satisfying payoff
+- Flat middle (pages 6–15) with no rising tension or surprises
+- Answers introduced too late or only mentioned once without driving the plot
+
 Rules:
 - List ALL characters with the exact page they first appear (introducedOnPage)
 - plotPoints must include major plot beats AND one user_input entry per child answer listed below
 - For user_input plotPoints, userInput MUST be copied exactly from the child answers list — never invent answers
 - Each plotPoint page must be the FIRST page where that beat, activity, or concept appears in the story text
 - Plot beats that introduce a new activity (e.g. doing dishes, visiting a place) must have the page where that activity first happens
-- criticFeedback.rating is 0-100 for a ${context.childAge}-year-old
-- inputsFitNaturally must be exactly "items_make_sense" or "items_feel_out_of_place"`,
+- criticFeedback.rating is 0-100 — err toward lower scores when in doubt
+- criticFeedback.faults must cite 2–4 specific problems (reference page numbers when possible)
+- criticFeedback.improvements must be concrete rewrites or structural fixes, not vague praise
+- inputsFitNaturally must be exactly "items_make_sense" or "items_feel_out_of_place"
+- Mark items_feel_out_of_place if ANY answer feels quoted, pasted, or barely integrated into the plot`,
         },
         {
           role: "user",
@@ -1468,6 +1562,16 @@ async function runGeneration(
   });
 
   const childContext = await fetchChild(supabase, childId);
+  const priorStories = await fetchPriorStoryFeedback(supabase, childId, storyId);
+  const priorStoryLessons = buildPriorStoryLessons(priorStories);
+  if (priorStoryLessons) {
+    log("Feedback", "Injecting lessons from prior stories", {
+      childId,
+      priorStoryCount: priorStories.length,
+      preview: priorStoryLessons.slice(0, 200),
+    });
+    childContext.priorStoryLessons = priorStoryLessons;
+  }
 
   const { error: statusError } = await supabase.from("stories").update({ status: "generating" }).eq("id", storyId);
   if (statusError) {
