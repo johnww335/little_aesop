@@ -218,7 +218,7 @@ export function countPlaceholderPages(pages) {
   return pages.filter((p) => isPlaceholderImage(p.image_url)).length
 }
 
-export const EXPECTED_FUNCTION_VERSION = '2025-06-19'
+export const EXPECTED_FUNCTION_VERSION = '2026-06-11'
 
 export async function resumeStoryIllustration(storyId) {
   log('Story', 'Resuming illustration chain', { storyId })
