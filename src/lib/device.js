@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react'
+
 /** iPhone, iPad, or iPad-as-Macintosh (iOS 13+ desktop UA). */
 export function isIOS() {
   if (typeof navigator === 'undefined') return false
@@ -26,4 +28,27 @@ export function supportsNativeElementFullscreen() {
 
 export function needsHomeScreenInstallForTrueFullscreen() {
   return isIOS() && !isStandalonePWA()
+}
+
+/** Match a CSS media query (updates on resize / orientation change). */
+export function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia(query).matches
+  })
+
+  useEffect(() => {
+    const mq = window.matchMedia(query)
+    const onChange = (e) => setMatches(e.matches)
+    mq.addEventListener('change', onChange)
+    setMatches(mq.matches)
+    return () => mq.removeEventListener('change', onChange)
+  }, [query])
+
+  return matches
+}
+
+/** Phones and narrow portrait — single-page story reader. */
+export function useNarrowViewport() {
+  return useMediaQuery('(max-width: 720px)')
 }

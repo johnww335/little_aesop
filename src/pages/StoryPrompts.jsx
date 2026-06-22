@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { getRandomQuestions, validateInputs, createAndStartStory } from '../lib/stories'
 import { log, error as logError } from '../lib/logger'
 import { Button, Alert } from '../components/ui'
@@ -215,7 +215,7 @@ export default function StoryPrompts() {
         <div key={currentStep} style={{ animation: 'fadeIn 0.2s ease' }}>
           <div style={{
             background: 'var(--gold-pale)',
-            border: '1px solid rgba(200,136,42,0.2)',
+            border: '1px solid rgba(126,107,184,0.2)',
             borderRadius: 'var(--radius-lg)',
             padding: '28px 24px',
             marginBottom: 24,
@@ -370,7 +370,7 @@ export default function StoryPrompts() {
 
 function PageShell({ children, childId }) {
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--cream)', backgroundImage: `radial-gradient(ellipse at 80% 0%, rgba(200,136,42,0.08) 0%, transparent 50%)` }}>
+    <div style={{ minHeight: '100vh', background: 'var(--cream)', backgroundImage: `radial-gradient(ellipse at 80% 0%, rgba(126,107,184,0.08) 0%, transparent 50%)` }}>
       <AppHeader childId={childId} />
       <main style={{ maxWidth: 560, margin: '0 auto', padding: '40px 20px' }}>
         <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 600, color: 'var(--ink)', marginBottom: 8, textAlign: 'center' }}>
