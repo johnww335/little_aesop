@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { AuthCard, FormField, Input, Button, Alert } from '../components/ui'
 
 export default function Login() {
@@ -67,6 +67,8 @@ export default function Login() {
         </Button>
         <p style={{ textAlign: 'center', fontSize: 14, color: 'var(--ink-muted)', marginTop: 20 }}>
           New here? <Link to="/signup">Create an account</Link>
+          {' · '}
+          <Link to="/" style={{ color: 'var(--ink-muted)', fontWeight: 600 }}>About Little Aesop</Link>
         </p>
       </form>
     </AuthCard>

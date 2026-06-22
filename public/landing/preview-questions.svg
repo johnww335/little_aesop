@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 480" fill="none">
+  <rect width="360" height="480" rx="24" fill="#FAF8FC"/>
+  <rect x="24" y="32" width="312" height="56" rx="14" fill="#D8C8F0"/>
+  <rect x="40" y="48" width="120" height="10" rx="5" fill="#1A1208" opacity="0.15"/>
+  <rect x="40" y="64" width="200" height="8" rx="4" fill="#1A1208" opacity="0.08"/>
+  <rect x="24" y="108" width="312" height="120" rx="18" fill="#FFFFFF" stroke="#1A1208" stroke-width="2"/>
+  <text x="40" y="148" font-family="Georgia, serif" font-size="18" font-weight="600" fill="#1A1208">What animal would</text>
+  <text x="40" y="174" font-family="Georgia, serif" font-size="18" font-weight="600" fill="#1A1208">be your sidekick?</text>
+  <rect x="40" y="192" width="280" height="22" rx="8" fill="#EFEAF8" stroke="#7E6BB8" stroke-width="1.5"/>
+  <circle cx="300" cy="168" r="28" fill="#E85D4A" opacity="0.9"/>
+  <text x="300" y="175" text-anchor="middle" font-size="24">*</text>
+  <rect x="24" y="252" width="148" height="12" rx="6" fill="#1A1208" opacity="0.06"/>
+  <rect x="24" y="272" width="312" height="8" rx="4" fill="#9B87D9"/>
+  <rect x="24" y="300" width="312" height="156" rx="18" fill="#1A6B4F" opacity="0.12"/>
+  <ellipse cx="120" cy="390" rx="48" ry="36" fill="#7E6BB8" opacity="0.35"/>
+  <ellipse cx="240" cy="370" rx="56" ry="40" fill="#E85D4A" opacity="0.25"/>
+  <text x="180" y="448" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#1A1208" opacity="0.5">BUILD YOUR STORY</text>
+</svg>

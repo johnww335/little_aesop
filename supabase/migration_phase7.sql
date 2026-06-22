@@ -1,0 +1,26 @@
+-- ============================================================
+-- Little Aesop — Phase 7 (documentation only)
+-- Generalized feedback loop audit trail in story_metadata JSON
+-- No new columns — uses existing story_metadata jsonb from phase 6
+-- ============================================================
+--
+-- When a story is generated, prior weak stories may contribute lessons.
+-- The NEW story stores what was applied under:
+--
+--   story_metadata.appliedPriorLessons
+--     lessons: string[]           -- generalized rules injected into the author prompt
+--     promptText: string         -- full text block sent to the model
+--     method: "gpt" | "fallback"  -- how lessons were produced
+--     sourceStories: [{ storyId, title, rating, awkwardInputs }]
+--     createdAt: ISO timestamp
+--
+-- Example query:
+--
+-- SELECT
+--   id,
+--   title,
+--   jsonb_pretty(story_metadata -> 'appliedPriorLessons') AS applied_prior_lessons
+-- FROM stories
+-- WHERE story_metadata ? 'appliedPriorLessons'
+-- ORDER BY created_at DESC
+-- LIMIT 20;

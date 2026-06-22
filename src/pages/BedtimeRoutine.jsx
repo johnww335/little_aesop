@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getStoryProgress, resumeStoryIllustration, getIllustrationTargetFromEnv } from '../lib/stories'
+import { getStoryProgress, resumeStoryIllustration, getIllustrationTargetFromEnv, STORY_PAGE_COUNT } from '../lib/stories'
 import { getChildById } from '../lib/children'
 import { Button } from '../components/ui'
 import AppHeader from '../components/AppHeader'
@@ -13,11 +13,30 @@ const ROUTINE_STEPS = [
   { emoji: '🧸', label: 'Pick a stuffed friend' },
 ]
 
+function resolvePhase(status, illustratedCount, pagesInDb, hasTitle) {
+  if (status === 'pending') return 'starting'
+  if (status === 'generating') {
+    if (illustratedCount > 0) return 'illustrating'
+    if (pagesInDb > 0 || hasTitle) return 'preparing'
+    return 'writing'
+  }
+  return 'starting'
+}
+
+function phaseLabel(phase, illustratedCount, illustrationTarget) {
+  if (phase === 'illustrating') return `Painting illustration ${illustratedCount} of ${illustrationTarget}…`
+  if (phase === 'preparing') return 'Starting illustrations…'
+  if (phase === 'writing') return 'Writing your story…'
+  return 'Getting your story ready…'
+}
+
 export default function BedtimeRoutine() {
   const { storyId, childId } = useParams()
   const navigate = useNavigate()
   const [childName, setChildName] = useState('')
   const [storyTitle, setStoryTitle] = useState('')
+  const [status, setStatus] = useState('pending')
+  const [pagesInDb, setPagesInDb] = useState(0)
   const [illustratedCount, setIllustratedCount] = useState(0)
   const [resumeLoading, setResumeLoading] = useState(false)
   const [resumeMessage, setResumeMessage] = useState('')
@@ -37,6 +56,8 @@ export default function BedtimeRoutine() {
       const { data } = await getStoryProgress(storyId)
       if (!active || !data) return
       if (data.title) setStoryTitle(data.title)
+      setStatus(data.status)
+      setPagesInDb(data.pagesInDb)
       setIllustratedCount(data.illustratedCount)
       if (data.status === 'ready') {
         navigate(`/story/${storyId}/read`, { replace: true })
@@ -44,7 +65,7 @@ export default function BedtimeRoutine() {
     }
 
     poll()
-    const interval = setInterval(poll, 8000)
+    const interval = setInterval(poll, 5000)
     return () => {
       active = false
       clearInterval(interval)
@@ -53,6 +74,12 @@ export default function BedtimeRoutine() {
 
   const name = childName || 'friend'
   const canResume = illustratedCount > 0 && illustratedCount < illustrationTarget
+  const phase = resolvePhase(status, illustratedCount, pagesInDb, Boolean(storyTitle))
+  const progressTarget = phase === 'illustrating' ? illustrationTarget : STORY_PAGE_COUNT
+  const progressValue = phase === 'illustrating'
+    ? illustratedCount
+    : pagesInDb > 0 ? pagesInDb : (storyTitle ? 1 : 0)
+  const progressPct = Math.min(100, Math.round((progressValue / progressTarget) * 100))
 
   const handleResume = async () => {
     setResumeLoading(true)
@@ -106,30 +133,71 @@ export default function BedtimeRoutine() {
 
         <div style={{
           background: 'var(--warm-white)',
+          border: '2px solid var(--ink)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '18px 20px',
+          marginBottom: 28,
+          textAlign: 'left',
+          boxShadow: 'var(--shadow-bold)',
+        }}>
+          <p style={{
+            fontSize: 15,
+            color: 'var(--ink-soft)',
+            marginBottom: 14,
+            fontStyle: 'italic',
+            textAlign: 'center',
+          }}>
+            {phaseLabel(phase, illustratedCount, illustrationTarget)}
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, color: 'var(--ink-muted)', fontWeight: 600 }}>
+              {phase === 'illustrating' ? 'Illustrations' : 'Progress'}
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-soft)' }}>
+              {phase === 'illustrating'
+                ? `${illustratedCount} / ${illustrationTarget}`
+                : `${progressValue} / ${progressTarget}`}
+            </span>
+          </div>
+          <div style={{
+            height: 10,
+            background: 'var(--border)',
+            borderRadius: 99,
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%',
+              width: `${progressPct}%`,
+              background: 'linear-gradient(90deg, var(--gold), var(--gold-light))',
+              borderRadius: 99,
+              transition: 'width 0.6s ease',
+            }} />
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--ink-muted)', marginTop: 10, textAlign: 'center' }}>
+            About {STORY_CREATION_ESTIMATE_MINUTES} minutes total — we'll open the story when it's ready
+          </p>
+        </div>
+
+        <div style={{
+          background: 'var(--warm-white)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
           padding: '20px 22px',
           marginBottom: 28,
-          textAlign: 'left',
+          textAlign: 'center',
         }}>
           <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-soft)', marginBottom: 14 }}>
             Your bedtime checklist
           </p>
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
             {ROUTINE_STEPS.map((step) => (
-              <li key={step.label} style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 16, color: 'var(--ink)' }}>
-                <span style={{ fontSize: 24, width: 32, textAlign: 'center' }}>{step.emoji}</span>
+              <li key={step.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, fontSize: 16, color: 'var(--ink)' }}>
+                <span style={{ fontSize: 24, width: 32, textAlign: 'center', flexShrink: 0 }}>{step.emoji}</span>
                 {step.label}
               </li>
             ))}
           </ul>
         </div>
-
-        {illustratedCount > 0 && (
-          <p style={{ fontSize: 14, color: 'var(--gold)', fontWeight: 600, marginBottom: 20 }}>
-            ✨ {illustratedCount} of {illustrationTarget} illustration{illustratedCount === 1 ? '' : 's'} ready so far…
-          </p>
-        )}
 
         {canResume && (
           <div style={{ marginBottom: 20 }}>

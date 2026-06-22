@@ -413,7 +413,7 @@ export default function GeneratingStory() {
             <div style={{
               height: '100%',
               width: `${Math.min(100, Math.round((progressValue / progressTarget) * 100))}%`,
-              background: 'linear-gradient(90deg, var(--gold), #e8a830)',
+              background: 'linear-gradient(90deg, var(--gold), var(--gold-light))',
               borderRadius: 99,
               transition: 'width 0.6s ease',
             }} />
@@ -428,7 +428,7 @@ export default function GeneratingStory() {
           <div style={{
             marginBottom: 16,
             background: 'var(--gold-pale)',
-            border: '1px solid rgba(200,136,42,0.25)',
+            border: '1px solid rgba(126,107,184,0.25)',
             borderRadius: 'var(--radius-lg)',
             padding: '14px 16px',
             textAlign: 'left',
@@ -441,7 +441,7 @@ export default function GeneratingStory() {
           <div style={{
             marginBottom: 16,
             background: 'var(--gold-pale)',
-            border: '1px solid rgba(200,136,42,0.25)',
+            border: '1px solid rgba(126,107,184,0.25)',
             borderRadius: 'var(--radius-lg)',
             padding: '14px 16px',
             textAlign: 'left',
@@ -492,7 +492,7 @@ export default function GeneratingStory() {
         <div style={{
           marginTop: 48,
           background: 'var(--gold-pale)',
-          border: '1px solid rgba(200,136,42,0.2)',
+          border: '1px solid rgba(126,107,184,0.2)',
           borderRadius: 'var(--radius-lg)',
           padding: '20px 24px',
           textAlign: 'left'

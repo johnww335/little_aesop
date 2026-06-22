@@ -8,10 +8,11 @@ export function BookshelfButton({ childId }) {
   return (
     <button
       type="button"
+      className="app-header-bookshelf"
       onClick={() => navigate(`/child/${childId}/bookshelf`)}
       style={{
-        background: 'var(--gold-pale)',
-        border: '1px solid rgba(200,136,42,0.25)',
+        background: 'var(--gold-bold)',
+        border: '2px solid var(--ink)',
         borderRadius: 'var(--radius-sm)',
         padding: '6px 14px',
         fontSize: 13,
@@ -31,54 +32,29 @@ export default function AppHeader({ childId, title, right }) {
   const navigate = useNavigate()
 
   return (
-    <header style={{
-      borderBottom: '1px solid var(--border)',
-      background: 'var(--warm-white)',
-      padding: '0 24px',
-      height: 64,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      position: 'sticky',
-      top: 0,
-      zIndex: 10,
-    }}>
-      <button
-        type="button"
-        onClick={() => navigate('/dashboard')}
-        aria-label="Back to child selection"
-        style={{
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          padding: 0,
-          display: 'flex',
-          alignItems: 'center',
-        }}
-      >
-        <Logo size="sm" />
-      </button>
+    <header
+      className={`app-header${title ? ' app-header--has-title' : ''}`}
+    >
+      <div className="app-header-start">
+        <button
+          type="button"
+          onClick={() => navigate('/dashboard')}
+          aria-label="Back to child selection"
+          className="app-header-logo-btn"
+        >
+          <Logo size="sm" to="/dashboard" />
+        </button>
+      </div>
 
-      {title && (
-        <h1 style={{
-          fontFamily: 'var(--font-display)',
-          fontSize: 16,
-          fontWeight: 600,
-          color: 'var(--ink)',
-          position: 'absolute',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          maxWidth: '40%',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          pointerEvents: 'none',
-        }}>
+      {title ? (
+        <h1 className="app-header-title">
           {title}
         </h1>
+      ) : (
+        <div className="app-header-title-spacer" aria-hidden="true" />
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' }}>
+      <div className="app-header-end">
         <BookshelfButton childId={childId} />
         {right}
       </div>

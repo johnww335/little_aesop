@@ -2,7 +2,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const LOG = "[generate-story]";
-const FUNCTION_VERSION = "2026-06-11";
+const FUNCTION_VERSION = "2026-06-22";
 const IMAGE_BATCH_SIZE = 5;
 /** Chained auto-runs use one page per edge invocation to stay within wall-clock limits. */
 const CHAIN_PAGE_SIZE = 1;
@@ -92,6 +92,22 @@ type CriticFeedback = {
 
 type UserInput = { question: string; answer: string };
 
+type PriorFeedbackSource = {
+  storyId: string;
+  title: string;
+  rating: number;
+  awkwardInputs: boolean;
+};
+
+/** Generalized lessons injected when this story was written (from prior stories). */
+type AppliedPriorLessons = {
+  lessons: string[];
+  promptText: string;
+  method: "gpt" | "fallback";
+  sourceStories: PriorFeedbackSource[];
+  createdAt: string;
+};
+
 type StoryMetadata = {
   characters: StoryCharacter[];
   plotSummary: string;
@@ -100,6 +116,12 @@ type StoryMetadata = {
   paletteNotes: string;
   userInputs: UserInput[];
   illustrationPageLimit?: number;
+  appliedPriorLessons?: AppliedPriorLessons;
+};
+
+type PriorStoryLessonsResult = {
+  promptText: string;
+  applied: AppliedPriorLessons;
 };
 
 function calculateAge(birthday: string): number {
@@ -163,9 +185,18 @@ async function fetchPriorStoryFeedback(
   return excludeStoryId ? rows.filter((r) => r.id !== excludeStoryId).slice(0, PRIOR_STORY_FEEDBACK_LIMIT) : rows;
 }
 
-/** Turn past criticFeedback into prompt instructions for the next story. */
-function buildPriorStoryLessons(priorStories: PriorStoryRow[]): string | undefined {
-  const lines: string[] = [];
+/** Raw critic notes from one past story, before generalization. */
+type PriorFeedbackItem = {
+  storyId: string;
+  title: string;
+  rating: number;
+  faults: string;
+  improvements: string;
+  awkwardInputs: boolean;
+};
+
+function collectPriorStoryFeedback(priorStories: PriorStoryRow[]): PriorFeedbackItem[] {
+  const items: PriorFeedbackItem[] = [];
 
   for (const row of priorStories) {
     const critic = row.story_metadata?.criticFeedback;
@@ -175,22 +206,170 @@ function buildPriorStoryLessons(priorStories: PriorStoryRow[]): string | undefin
     const awkwardInputs = critic.inputsFitNaturally === "items_feel_out_of_place";
     if (!weakRating && !awkwardInputs) continue;
 
-    const label = row.title?.trim() || "Untitled story";
-    const parts: string[] = [`From "${label}" (critic score ${critic.rating}/100):`];
-    if (critic.faults?.trim()) parts.push(`Problems: ${critic.faults.trim()}`);
-    if (critic.improvements?.trim()) parts.push(`Do better: ${critic.improvements.trim()}`);
-    if (awkwardInputs) {
-      parts.push("Child answers felt pasted in — weave each answer as a concrete scene or action, not a bare noun.");
-    }
-    lines.push(parts.join(" "));
+    items.push({
+      storyId: row.id,
+      title: row.title?.trim() || "Untitled story",
+      rating: critic.rating,
+      faults: critic.faults?.trim() ?? "",
+      improvements: critic.improvements?.trim() ?? "",
+      awkwardInputs,
+    });
   }
 
-  if (!lines.length) return undefined;
+  return items;
+}
 
+function buildFallbackLessonList(items: PriorFeedbackItem[]): string[] {
+  const lines: string[] = [];
+  const combined = items.map(i => `${i.faults} ${i.improvements}`).join(" ");
+
+  if (items.some(i => i.awkwardInputs)) {
+    lines.push("Weave each child answer as a concrete scene, action, or setting — never as a bare label or pasted noun.");
+  }
+  if (/conflict|challenge|middle|pacing|filler|weak|disconnected|flat/i.test(combined)) {
+    lines.push("Include a clear problem or challenge in the middle pages, with rising action before a satisfying ending.");
+  }
+  if (/input|answer|weave|natural|forced|pasted|integrat/i.test(combined) || items.some(i => i.awkwardInputs)) {
+    lines.push("Every child answer must drive part of the plot as an event or detail, spread naturally across the story.");
+  }
+  if (!lines.length) {
+    lines.push("Write a clear linear adventure with vivid scenes on every page and no filler or repetitive sentences.");
+  }
+
+  return lines;
+}
+
+/** Rule-based fallback when GPT generalization is unavailable. */
+function fallbackGeneralizedLessons(items: PriorFeedbackItem[]): { lessons: string[]; promptText: string } {
+  const lessons = buildFallbackLessonList(items);
+  return { lessons, promptText: formatGeneralizedLessons(lessons) };
+}
+
+function formatGeneralizedLessons(lessons: string[]): string {
   return [
-    "Lessons from this child's recent stories — avoid repeating these mistakes:",
-    ...lines.map((l, i) => `${i + 1}. ${l}`),
+    "General lessons from past stories (apply to this new story only — do not reuse old plots, names, or answers):",
+    ...lessons.map((lesson, i) => `${i + 1}. ${lesson}`),
   ].join("\n");
+}
+
+async function generalizePriorStoryLessons(
+  items: PriorFeedbackItem[],
+  context: StoryContext,
+  openaiKey: string,
+): Promise<string[]> {
+  const rawBlock = items.map((item, i) => {
+    const parts = [`Story ${i + 1} "${item.title}" (critic ${item.rating}/100)`];
+    if (item.faults) parts.push(`Faults: ${item.faults}`);
+    if (item.improvements) parts.push(`Improvements: ${item.improvements}`);
+    if (item.awkwardInputs) parts.push("Child answers felt forced or out of place.");
+    return parts.join("\n");
+  }).join("\n\n");
+
+  log("Feedback", "Generalizing prior story critic notes", { sourceStoryCount: items.length });
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${openaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      max_tokens: 400,
+      messages: [
+        {
+          role: "system",
+          content: `You distill children's story editor notes into general writing rules for the NEXT story for a ${context.childAge}-year-old reader.
+
+Past notes mention specific plots, character names, story titles, and child answers — strip ALL of that out.
+
+Return ONLY JSON: { "lessons": ["rule 1", "rule 2"] }
+
+Output rules:
+- 2 to 4 short, actionable lessons
+- Each lesson must apply to ANY new story with completely different child answers
+- NEVER mention character names, story titles, or specific child answers from the past
+- Focus on: plot structure, weaving answers naturally, pacing, conflict, avoiding filler, read-aloud quality
+- Write in imperative voice ("Include...", "Avoid...", "Weave...")`,
+        },
+        {
+          role: "user",
+          content: `Past editor notes to generalize:\n\n${rawBlock}`,
+        },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data?.error?.message || `Lesson generalization API error (${response.status})`);
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Lesson generalization returned no content");
+
+  const parsed = JSON.parse(content) as { lessons?: string[] };
+  const lessons = (parsed.lessons ?? []).map((l) => l.trim()).filter(Boolean).slice(0, 4);
+  if (!lessons.length) throw new Error("Lesson generalization returned empty lessons");
+
+  return lessons;
+}
+
+function buildAppliedPriorLessons(
+  items: PriorFeedbackItem[],
+  lessons: string[],
+  promptText: string,
+  method: AppliedPriorLessons["method"],
+): AppliedPriorLessons {
+  return {
+    lessons,
+    promptText,
+    method,
+    sourceStories: items.map((item) => ({
+      storyId: item.storyId,
+      title: item.title,
+      rating: item.rating,
+      awkwardInputs: item.awkwardInputs,
+    })),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/** Turn past criticFeedback into generalized prompt instructions for the next story. */
+async function buildPriorStoryLessons(
+  priorStories: PriorStoryRow[],
+  context: StoryContext,
+  openaiKey: string | undefined,
+): Promise<PriorStoryLessonsResult | undefined> {
+  const items = collectPriorStoryFeedback(priorStories);
+  if (!items.length) return undefined;
+
+  if (openaiKey) {
+    try {
+      const lessons = await generalizePriorStoryLessons(items, context, openaiKey);
+      const promptText = formatGeneralizedLessons(lessons);
+      const applied = buildAppliedPriorLessons(items, lessons, promptText, "gpt");
+      log("Feedback", "Generalized prior story lessons ready", {
+        sourceStoryCount: items.length,
+        lessonCount: lessons.length,
+        sourceStoryIds: items.map((i) => i.storyId),
+        preview: promptText.slice(0, 240),
+      });
+      return { promptText, applied };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logError("Feedback", "Generalization failed — using rule-based fallback", { message });
+    }
+  }
+
+  const { lessons, promptText } = fallbackGeneralizedLessons(items);
+  const applied = buildAppliedPriorLessons(items, lessons, promptText, "fallback");
+  log("Feedback", "Using rule-based lesson fallback", {
+    sourceStoryCount: items.length,
+    sourceStoryIds: items.map((i) => i.storyId),
+  });
+  return { promptText, applied };
 }
 
 function ageWritingGuide(age: number): string {
@@ -1512,6 +1691,15 @@ function logStoryMetadataDebug(storyId: string, metadata: StoryMetadata) {
   console.log(`${LOG} [Metadata] Critic: ${metadata.criticFeedback.rating}/100 — ${metadata.criticFeedback.inputsFitNaturally}`);
   console.log(`${LOG} [Metadata] Faults: ${metadata.criticFeedback.faults}`);
   console.log(`${LOG} [Metadata] Improvements: ${metadata.criticFeedback.improvements}`);
+  if (metadata.appliedPriorLessons) {
+    console.log(`${LOG} [Metadata] Applied prior lessons (${metadata.appliedPriorLessons.method}):`);
+    for (const source of metadata.appliedPriorLessons.sourceStories) {
+      console.log(`${LOG} [Metadata]   from "${source.title}" (${source.rating}/100) [${source.storyId}]`);
+    }
+    metadata.appliedPriorLessons.lessons.forEach((lesson, i) => {
+      console.log(`${LOG} [Metadata]   ${i + 1}. ${lesson}`);
+    });
+  }
   for (const p of metadata.plotPoints) {
     const tag = p.type === "user_input" ? `input "${p.userInput}"` : "plot";
     console.log(`${LOG} [Metadata] Page ${p.page} (${tag}): ${p.description}`);
@@ -1564,14 +1752,17 @@ async function runGeneration(
 
   const childContext = await fetchChild(supabase, childId);
   const priorStories = await fetchPriorStoryFeedback(supabase, childId, storyId);
-  const priorStoryLessons = buildPriorStoryLessons(priorStories);
-  if (priorStoryLessons) {
+  const priorLessonsResult = await buildPriorStoryLessons(priorStories, childContext, openaiKey);
+  let appliedPriorLessons: AppliedPriorLessons | undefined;
+  if (priorLessonsResult) {
     log("Feedback", "Injecting lessons from prior stories", {
       childId,
       priorStoryCount: priorStories.length,
-      preview: priorStoryLessons.slice(0, 200),
+      sourceStoryIds: priorLessonsResult.applied.sourceStories.map((s) => s.storyId),
+      preview: priorLessonsResult.promptText.slice(0, 200),
     });
-    childContext.priorStoryLessons = priorStoryLessons;
+    childContext.priorStoryLessons = priorLessonsResult.promptText;
+    appliedPriorLessons = priorLessonsResult.applied;
   }
 
   const { error: statusError } = await supabase.from("stories").update({ status: "generating" }).eq("id", storyId);
@@ -1642,6 +1833,9 @@ async function runGeneration(
   });
 
   architectureMetadata.illustrationPageLimit = PAGE_COUNT;
+  if (appliedPriorLessons) {
+    architectureMetadata.appliedPriorLessons = appliedPriorLessons;
+  }
 
   await saveStoryMetadata(supabase, storyId, architectureMetadata);
   logStoryMetadataDebug(storyId, architectureMetadata);

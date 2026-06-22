@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { getStoriesForChild, deleteStory, STORY_PAGE_COUNT, computeIllustrationProgress, formatStoryFailureSummary, getIllustrationTargetFromEnv } from '../lib/stories'
 import { getChildren, getAvatarEmoji } from '../lib/children'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
 import OnboardingModal from '../components/OnboardingModal'
 import { useOnboarding, ONBOARDING_STEPS } from '../lib/onboarding'
+import './Bookshelf.css'
 
 export default function Bookshelf() {
   const { childId } = useParams()
@@ -75,37 +76,33 @@ export default function Bookshelf() {
     <div style={{ minHeight: '100vh', background: 'var(--cream)', backgroundImage: `radial-gradient(ellipse at 10% 100%, rgba(45,90,61,0.06) 0%, transparent 50%)` }}>
       <AppHeader childId={childId} />
 
-      <main style={{ maxWidth: 800, margin: '0 auto', padding: '40px 20px' }}>
+      <main className="bookshelf-main">
         {/* Child header */}
         {child && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 36 }}>
-            <div style={{ width: 56, height: 56, background: 'var(--gold-pale)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, border: '2px solid var(--border)', flexShrink: 0 }}>
-              {getAvatarEmoji(child.gender, child.name)}
+          <div className="bookshelf-header">
+            <div className="bookshelf-header-main">
+              <div className="bookshelf-avatar">
+                {getAvatarEmoji(child.gender, child.name)}
+              </div>
+              <div className="bookshelf-title-wrap">
+                <h1 className="bookshelf-title">
+                  {child.name}'s Bookshelf
+                </h1>
+                <p className="bookshelf-subtitle">
+                  {stories.length === 0
+                    ? 'No stories yet'
+                    : [
+                        readyCount > 0 ? `${readyCount} ${readyCount === 1 ? 'story' : 'stories'}` : null,
+                        inProgressCount > 0 ? `${inProgressCount} creating` : null,
+                      ].filter(Boolean).join(' · ')}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
-                {child.name}'s Bookshelf
-              </h1>
-              <p style={{ fontSize: 14, color: 'var(--ink-muted)' }}>
-                {stories.length === 0
-                  ? 'No stories yet'
-                  : [
-                      readyCount > 0 ? `${readyCount} ${readyCount === 1 ? 'story' : 'stories'}` : null,
-                      inProgressCount > 0 ? `${inProgressCount} creating` : null,
-                    ].filter(Boolean).join(' · ')}
-              </p>
-            </div>
-            <div style={{ marginLeft: 'auto' }}>
+            <div className="bookshelf-new-story-wrap">
               <Button
                 id="bookshelf-new-story-btn"
+                className={`bookshelf-new-story-btn${showBookshelfIntro ? ' bookshelf-new-story-btn--highlight' : ''}`}
                 onClick={() => navigate(`/child/${childId}/prompts`)}
-                style={{
-                  width: 'auto',
-                  padding: '10px 20px',
-                  ...(showBookshelfIntro ? {
-                    boxShadow: '0 0 0 3px rgba(200,136,42,0.45)',
-                  } : {}),
-                }}
               >
                 ✨ New story
               </Button>
@@ -123,7 +120,7 @@ export default function Bookshelf() {
         ) : stories.length === 0 ? (
           <EmptyState childName={child?.name} childId={childId} />
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 20 }}>
+          <div className="bookshelf-grid">
             {stories.map(story => (
               <StoryCard
                 key={story.id}
@@ -202,7 +199,7 @@ function StoryCard({ story, coverImage, onDelete }) {
       onClick={handleClick}
       style={{
         background: 'var(--warm-white)',
-        border: `1px solid ${failed ? 'rgba(192,83,74,0.35)' : inProgress ? 'rgba(200,136,42,0.35)' : 'var(--border)'}`,
+        border: `1px solid ${failed ? 'rgba(192,83,74,0.35)' : inProgress ? 'rgba(126,107,184,0.35)' : 'var(--border)'}`,
         borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
         cursor: failed ? 'pointer' : 'pointer',

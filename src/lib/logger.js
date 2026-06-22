@@ -114,6 +114,17 @@ export function logStoryMetadata(storyId, metadata) {
     console.log(`${PREFIX} [Story] Improvements:`, criticFeedback.improvements)
   }
 
+  if (metadata.appliedPriorLessons) {
+    const applied = metadata.appliedPriorLessons
+    console.log(`${PREFIX} [Story] Applied prior lessons (${applied.method}):`)
+    applied.sourceStories?.forEach((s) => {
+      console.log(`  • from "${s.title}" (${s.rating}/100) — ${s.storyId}`)
+    })
+    applied.lessons?.forEach((lesson, i) => {
+      console.log(`  ${i + 1}. ${lesson}`)
+    })
+  }
+
   if (plotPoints?.length) {
     console.log(`${PREFIX} [Story] Plot points & input introductions:`)
     plotPoints.forEach((p) => {

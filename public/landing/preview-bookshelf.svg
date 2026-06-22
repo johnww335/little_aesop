@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 480" fill="none">
+  <rect width="360" height="480" rx="24" fill="#EDE7F6"/>
+  <rect x="20" y="24" width="320" height="48" rx="12" fill="#1A1208" opacity="0.08"/>
+  <text x="36" y="56" font-family="Georgia, serif" font-size="20" font-weight="700" fill="#1A1208">Emma's bookshelf</text>
+  <rect x="228" y="34" width="96" height="28" rx="14" fill="#1A1208"/>
+  <text x="276" y="53" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="700" fill="#FFF8ED">New story</text>
+  <!-- book cards -->
+  <rect x="20" y="92" width="148" height="200" rx="16" fill="#FFF8ED" stroke="#1A1208" stroke-width="2"/>
+  <rect x="20" y="92" width="148" height="120" rx="16" fill="#E85D4A" opacity="0.25"/>
+  <ellipse cx="94" cy="152" rx="40" ry="30" fill="#1A6B4F" opacity="0.4"/>
+  <rect x="28" y="224" width="120" height="10" rx="5" fill="#1A1208" opacity="0.2"/>
+  <rect x="28" y="242" width="80" height="8" rx="4" fill="#1A1208" opacity="0.1"/>
+  <rect x="192" y="92" width="148" height="200" rx="16" fill="#FFF8ED" stroke="#1A1208" stroke-width="2"/>
+  <rect x="192" y="92" width="148" height="120" rx="16" fill="#1A6B4F" opacity="0.25"/>
+  <circle cx="266" cy="152" r="36" fill="#9B87D9" opacity="0.6"/>
+  <rect x="200" y="224" width="110" height="10" rx="5" fill="#1A1208" opacity="0.2"/>
+  <rect x="200" y="242" width="90" height="8" rx="4" fill="#1A1208" opacity="0.1"/>
+  <rect x="20" y="312" width="148" height="200" rx="16" fill="#FFF8ED" stroke="#1A1208" stroke-width="2" opacity="0.85"/>
+  <rect x="192" y="312" width="148" height="200" rx="16" fill="#FFF8ED" stroke="#1A1208" stroke-width="2" opacity="0.85"/>
+  <rect x="20" y="312" width="148" height="100" rx="16" fill="#7E6BB8" opacity="0.2"/>
+  <rect x="192" y="312" width="148" height="100" rx="16" fill="#1A6B4F" opacity="0.15"/>
+</svg>

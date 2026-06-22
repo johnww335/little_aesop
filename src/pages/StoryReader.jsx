@@ -9,12 +9,13 @@ import {
   getUserInputIntroForPage,
   splitTextAroundPhrase,
 } from '../lib/stories'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import AppHeader from '../components/AppHeader'
 import {
   supportsNativeElementFullscreen,
   needsHomeScreenInstallForTrueFullscreen,
   isStandalonePWA,
+  useNarrowViewport,
 } from '../lib/device'
 
 const IPAD_INSTALL_TIP_KEY = 'little-aesop-ipad-homescreen-tip-dismissed'
@@ -39,6 +40,8 @@ export default function StoryReader() {
   const turnTimerRef = useRef(null)
   const shellRef = useRef(null)
   const preloadedImagesRef = useRef(null)
+  const prevSinglePageRef = useRef(null)
+  const isSinglePage = useNarrowViewport()
 
   const exitNativeFullscreen = useCallback(async () => {
     try {
@@ -161,20 +164,43 @@ export default function StoryReader() {
       setBatchRunning(false)
     }
   }
-  const spreadCount = Math.max(1, Math.ceil(pageCount / 2))
+  const spreadCount = Math.max(1, isSinglePage ? pageCount : Math.ceil(pageCount / 2))
   const isFirst = currentSpread === 0
   const isLast = currentSpread >= spreadCount - 1
 
-  const leftPage = pages[currentSpread * 2]
-  const rightPage = pages[currentSpread * 2 + 1]
+  const leftPageIndex = isSinglePage ? currentSpread : currentSpread * 2
+  const leftPage = pages[leftPageIndex]
+  const rightPage = isSinglePage ? null : pages[currentSpread * 2 + 1]
 
-  const leftPageNum = currentSpread * 2 + 1
-  const rightPageNum = currentSpread * 2 + 2
+  const leftPageNum = leftPageIndex + 1
+  const rightPageNum = isSinglePage ? null : currentSpread * 2 + 2
+
+  useEffect(() => {
+    setCurrentSpread((s) => Math.min(s, Math.max(0, spreadCount - 1)))
+  }, [spreadCount])
+
+  useEffect(() => {
+    if (prevSinglePageRef.current === null) {
+      prevSinglePageRef.current = isSinglePage
+      return
+    }
+    if (prevSinglePageRef.current === isSinglePage) return
+    prevSinglePageRef.current = isSinglePage
+    setCurrentSpread((prev) => {
+      if (isSinglePage) {
+        return Math.min(prev * 2, Math.max(0, pageCount - 1))
+      }
+      return Math.min(Math.floor(prev / 2), Math.max(0, Math.ceil(pageCount / 2) - 1))
+    })
+  }, [isSinglePage, pageCount])
 
   useEffect(() => {
     if (!story?.story_metadata) return undefined
 
-    const pagesOnSpread = [leftPageNum, rightPageNum].filter(
+    const pagesOnSpread = (isSinglePage
+      ? [leftPageNum]
+      : [leftPageNum, rightPageNum]
+    ).filter(
       (p) => p <= pageCount && getUserInputIntroForPage(story.story_metadata, p),
     )
     const fresh = pagesOnSpread.filter((p) => !sparkledRef.current.has(p))
@@ -185,7 +211,7 @@ export default function StoryReader() {
 
     const timer = setTimeout(() => setSparklePages([]), 2400)
     return () => clearTimeout(timer)
-  }, [currentSpread, story?.story_metadata, leftPageNum, rightPageNum, pageCount])
+  }, [currentSpread, story?.story_metadata, leftPageNum, rightPageNum, pageCount, isSinglePage])
 
   const handlePrev = useCallback(() => {
     setTurnDirection('back')
@@ -288,9 +314,9 @@ export default function StoryReader() {
     )
   }
 
-  const progressLabel = rightPage && rightPageNum <= pageCount
-    ? `Pages ${leftPageNum}–${rightPageNum} of ${pageCount}`
-    : `Page ${leftPageNum} of ${pageCount}`
+  const progressLabel = isSinglePage || !rightPage || rightPageNum > pageCount
+    ? `Page ${leftPageNum} of ${pageCount}`
+    : `Pages ${leftPageNum}–${rightPageNum} of ${pageCount}`
 
   const fullscreenBtnLabel = fullscreen
     ? 'Exit full screen'
@@ -334,29 +360,33 @@ export default function StoryReader() {
           onTouchEnd={handleTouchEnd}
         >
           <div
-            className={`reader-book${turnDirection ? ` reader-book--turn-${turnDirection}` : ''}`}
+            className={`reader-book${isSinglePage ? ' reader-book--single' : ''}${turnDirection ? ` reader-book--turn-${turnDirection}` : ''}`}
           >
             <BookPagePanel
               page={leftPage}
               pageNum={leftPageNum}
-              side="left"
+              side={isSinglePage ? 'single' : 'left'}
               loaded={!!loadedImages[leftPageNum]}
               onImageLoad={() => markImageLoaded(leftPageNum)}
               highlightPhrase={getUserInputIntroForPage(story.story_metadata, leftPageNum)}
               sparkleActive={sparklePages.includes(leftPageNum)}
             />
 
-            <div className="reader-spine" aria-hidden="true" />
+            {!isSinglePage && (
+              <>
+                <div className="reader-spine" aria-hidden="true" />
 
-            <BookPagePanel
-              page={rightPage}
-              pageNum={rightPageNum}
-              side="right"
-              loaded={!!loadedImages[rightPageNum]}
-              onImageLoad={() => markImageLoaded(rightPageNum)}
-              highlightPhrase={getUserInputIntroForPage(story.story_metadata, rightPageNum)}
-              sparkleActive={sparklePages.includes(rightPageNum)}
-            />
+                <BookPagePanel
+                  page={rightPage}
+                  pageNum={rightPageNum}
+                  side="right"
+                  loaded={!!loadedImages[rightPageNum]}
+                  onImageLoad={() => markImageLoaded(rightPageNum)}
+                  highlightPhrase={getUserInputIntroForPage(story.story_metadata, rightPageNum)}
+                  sparkleActive={sparklePages.includes(rightPageNum)}
+                />
+              </>
+            )}
           </div>
         </div>
 
@@ -535,7 +565,7 @@ const READER_STYLES = `
     background: var(--cream);
     background-image:
       radial-gradient(ellipse at 15% 80%, rgba(45,90,61,0.05) 0%, transparent 55%),
-      radial-gradient(ellipse at 85% 20%, rgba(200,136,42,0.06) 0%, transparent 50%);
+      radial-gradient(ellipse at 85% 20%, rgba(126,107,184,0.06) 0%, transparent 50%);
   }
 
   .reader-shell--fullscreen {
@@ -549,7 +579,7 @@ const READER_STYLES = `
     min-height: 100dvh;
     background: #1a1208;
     background-image:
-      radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
+      radial-gradient(ellipse at 50% 30%, rgba(126,107,184,0.08) 0%, transparent 55%);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
 
@@ -617,7 +647,7 @@ const READER_STYLES = `
     margin: 0;
     background: #1a1208;
     background-image:
-      radial-gradient(ellipse at 50% 30%, rgba(200,136,42,0.08) 0%, transparent 55%);
+      radial-gradient(ellipse at 50% 30%, rgba(126,107,184,0.08) 0%, transparent 55%);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
 
@@ -825,6 +855,32 @@ const READER_STYLES = `
     border-radius: 0 4px 4px 0;
   }
 
+  .reader-page-single {
+    background: linear-gradient(180deg, #f7f0e4 0%, #fffdf8 100%);
+    border-radius: 10px;
+  }
+
+  .reader-page-single .reader-illustration {
+    padding: 12px 14px 6px;
+  }
+
+  .reader-page-single .reader-text-wrap {
+    padding: 10px 16px 14px;
+    max-height: 32%;
+    min-height: 88px;
+  }
+
+  .reader-book--single {
+    grid-template-columns: 1fr;
+    border-radius: 12px;
+    height: min(78vh, 680px);
+  }
+
+  .reader-book--single .reader-text {
+    font-size: clamp(14px, 3.6vw, 16px);
+    -webkit-line-clamp: 5;
+  }
+
   .reader-page-empty {
     background: linear-gradient(225deg, #fffdf8 0%, #faf7f0 100%);
   }
@@ -945,11 +1001,11 @@ const READER_STYLES = `
 
   @keyframes readerInputSparkle {
     0% {
-      background: rgba(200, 136, 42, 0.5);
-      box-shadow: 0 0 10px rgba(200, 136, 42, 0.45);
+      background: rgba(126, 107, 184, 0.5);
+      box-shadow: 0 0 10px rgba(126, 107, 184, 0.45);
     }
     25% {
-      background: rgba(200, 136, 42, 0.35);
+      background: rgba(126, 107, 184, 0.35);
     }
     100% {
       background: transparent;
@@ -1070,14 +1126,14 @@ const READER_STYLES = `
     margin-top: 20px;
     padding: 12px 16px;
     background: rgba(44, 26, 14, 0.06);
-    border: 1px dashed rgba(200, 136, 42, 0.45);
+    border: 1px dashed rgba(126, 107, 184, 0.45);
     border-radius: var(--radius-sm);
     text-align: center;
   }
 
   .reader-dev-btn {
     background: var(--gold-pale);
-    border: 1px solid rgba(200, 136, 42, 0.35);
+    border: 1px solid rgba(126, 107, 184, 0.35);
     border-radius: var(--radius-sm);
     padding: 8px 16px;
     font-size: 13px;
@@ -1125,9 +1181,23 @@ const READER_STYLES = `
   }
 
   @media (max-width: 720px) {
+    .reader-main {
+      padding: 12px 12px max(20px, env(safe-area-inset-bottom));
+      min-height: calc(100dvh - 64px);
+    }
+
+    .reader-layout {
+      gap: 14px;
+    }
+
     .reader-book {
       height: min(68vh, 560px);
       min-height: 360px;
+    }
+
+    .reader-book--single {
+      height: min(72vh, 620px);
+      min-height: 400px;
     }
 
     .reader-shell--fullscreen .reader-book {
@@ -1135,12 +1205,21 @@ const READER_STYLES = `
       min-height: 0;
     }
 
+    .reader-shell--fullscreen .reader-book--single {
+      height: 100%;
+    }
+
     .reader-shell--fullscreen .reader-book-wrap {
-      padding-bottom: 72px;
+      padding-bottom: max(72px, env(safe-area-inset-bottom));
     }
 
     .reader-illustration {
       padding: 8px 10px 4px;
+    }
+
+    .reader-book--single .reader-text-wrap {
+      max-height: 34%;
+      min-height: 92px;
     }
 
     .reader-text-wrap {
@@ -1150,14 +1229,28 @@ const READER_STYLES = `
     }
 
     .reader-text {
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.45;
       -webkit-line-clamp: 3;
+    }
+
+    .reader-book--single .reader-text {
+      font-size: clamp(14px, 4vw, 16px);
+      -webkit-line-clamp: 5;
     }
 
     .reader-nav {
       flex-wrap: wrap;
       justify-content: center;
+      gap: 10px;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .reader-nav-btn,
+    .reader-finish,
+    .reader-fullscreen-btn {
+      min-height: 44px;
+      padding: 12px 16px;
     }
 
     .reader-fullscreen-btn {
@@ -1167,6 +1260,16 @@ const READER_STYLES = `
     .reader-progress {
       order: -1;
       width: 100%;
+    }
+
+    .reader-progress-bar {
+      max-width: none;
+    }
+
+    .reader-hint {
+      font-size: 12px;
+      text-align: center;
+      padding: 0 8px;
     }
   }
 `

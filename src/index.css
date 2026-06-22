@@ -1,31 +1,52 @@
-@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Nunito:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;0,700;1,500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --cream: #FDF6EC;
-  --warm-white: #FFFAF3;
-  --ink: #2C1A0E;
-  --ink-soft: #5C3D2A;
-  --ink-muted: #9C7B65;
-  --gold: #C8882A;
-  --gold-light: #F0C97A;
-  --gold-pale: #FBF0D8;
-  --forest: #2D5A3D;
-  --forest-light: #4A8A60;
-  --forest-pale: #EBF4EE;
-  --rose: #C0534A;
-  --rose-pale: #FAECEA;
-  --border: rgba(44,26,14,0.12);
-  --border-strong: rgba(44,26,14,0.22);
-  --shadow-sm: 0 1px 3px rgba(44,26,14,0.08);
-  --shadow-md: 0 4px 16px rgba(44,26,14,0.10);
-  --shadow-lg: 0 8px 32px rgba(44,26,14,0.13);
-  --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 22px;
+  /* Surfaces */
+  --cream: #FAF8FC;
+  --warm-white: #FFFFFF;
+  --surface-muted: #F3EEF9;
+
+  /* Ink */
+  --ink: #14100C;
+  --ink-soft: #3D342B;
+  --ink-muted: #7A6F62;
+
+  /* Purple accent palette (vars kept as --gold-* for compatibility) */
+  --gold: #7E6BB8;
+  --gold-light: #B8A8E8;
+  --gold-pale: #EFEAF8;
+  --gold-bold: #9B87D9;
+  --hero-bg: #EDE7F6;
+  --accent-rgb: 126, 107, 184;
+
+  --coral: #E85D4A;
+  --coral-pale: #FFE8E4;
+
+  --forest: #1A6B4F;
+  --forest-light: #2A9B72;
+  --forest-pale: #E4F5EE;
+
+  --rose: #D64545;
+  --rose-pale: #FFEAEA;
+
+  /* Structure */
+  --border: rgba(20, 16, 12, 0.1);
+  --border-strong: rgba(20, 16, 12, 0.22);
+  --shadow-sm: 0 2px 8px rgba(20, 16, 12, 0.06);
+  --shadow-md: 0 8px 24px rgba(20, 16, 12, 0.1);
+  --shadow-lg: 0 16px 48px rgba(20, 16, 12, 0.14);
+  --shadow-bold: 0 6px 0 rgba(20, 16, 12, 0.12);
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
   --font-display: 'Lora', Georgia, serif;
-  --font-body: 'Nunito', sans-serif;
+  --font-body: 'Plus Jakarta Sans', system-ui, sans-serif;
 }
 
 html, body, #root {
@@ -36,10 +57,101 @@ html, body, #root {
   font-size: 16px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 
-a { color: var(--gold); text-decoration: none; }
+@media (max-width: 720px) {
+  .app-header {
+    padding-left: max(12px, env(safe-area-inset-left)) !important;
+    padding-right: max(12px, env(safe-area-inset-right)) !important;
+    gap: 8px !important;
+  }
+
+  .app-header--has-title .app-logo-text {
+    display: none;
+  }
+
+  .app-header-title {
+    font-size: 14px !important;
+  }
+
+  .app-header-bookshelf {
+    min-height: 40px;
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+  }
+}
+
+.app-header {
+  border-bottom: 2px solid var(--border-strong);
+  background: var(--warm-white);
+  padding: 0 24px;
+  height: 64;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.app-header-start,
+.app-header-end {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.app-header-end {
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.app-header-logo-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+}
+
+.app-header-title {
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-header-title-spacer {
+  min-width: 0;
+}
+
+a { color: var(--gold); text-decoration: none; font-weight: 600; }
 a:hover { text-decoration: underline; }
+
+.app-logo-mark {
+  display: flex;
+  flex-shrink: 0;
+  line-height: 0;
+  border-radius: 11px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.45) inset,
+    0 1px 2px rgba(20, 16, 12, 0.08),
+    0 4px 10px rgba(126, 107, 184, 0.22);
+}
+
+.app-logo-mark svg {
+  display: block;
+  border-radius: 11px;
+}
 
 button {
   font-family: var(--font-body);
@@ -48,7 +160,7 @@ button {
   outline: none;
 }
 
-input, select {
+input, select, textarea {
   font-family: var(--font-body);
   font-size: 15px;
 }
@@ -58,3 +170,5 @@ input, select {
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); white-space: nowrap; border: 0;
 }
+
+@keyframes spin { to { transform: rotate(360deg); } }

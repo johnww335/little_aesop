@@ -1,20 +1,54 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
+import { Link } from 'react-router-dom'
 
-export function Logo({ size = 'md' }) {
+export function Logo({ size = 'md', to = '/', className = '' }) {
+  const gradId = useId()
   const sizes = { sm: { icon: 28, title: 18 }, md: { icon: 40, title: 26 }, lg: { icon: 56, title: 36 } }
   const s = sizes[size]
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <svg width={s.icon} height={s.icon} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <rect width="40" height="40" rx="12" fill="var(--gold)"/>
-        <path d="M20 8C20 8 12 13 12 20C12 24 14 27 17 28.5L20 32L23 28.5C26 27 28 24 28 20C28 13 20 8 20 8Z" fill="var(--warm-white)" opacity="0.95"/>
-        <path d="M20 8L20 32" stroke="var(--gold)" strokeWidth="1.5" strokeLinecap="round" opacity="0.4"/>
-        <circle cx="20" cy="19" r="3" fill="var(--gold)"/>
-      </svg>
-      <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: s.title, color: 'var(--ink)', letterSpacing: '-0.02em' }}>
+    <Link
+      to={to}
+      aria-label="Little Aesop home"
+      className={`app-logo${className ? ` ${className}` : ''}`}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', minWidth: 0 }}
+    >
+      <span className="app-logo-mark" aria-hidden="true">
+        <svg
+          width={s.icon}
+          height={s.icon}
+          viewBox="0 0 40 40"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          shapeRendering="geometricPrecision"
+        >
+          <defs>
+            <linearGradient id={gradId} x1="20" y1="4" x2="20" y2="36" gradientUnits="userSpaceOnUse">
+              <stop stopColor="var(--gold-light)" />
+              <stop offset="1" stopColor="var(--gold-bold)" />
+            </linearGradient>
+          </defs>
+          <rect width="40" height="40" rx="11" fill={`url(#${gradId})`} />
+          <path
+            d="M20 9.5C20 9.5 13.25 13.75 13.25 19.75C13.25 23.35 15 26 17.35 27.35L20 30.25L22.65 27.35C25 26 26.75 23.35 26.75 19.75C26.75 13.75 20 9.5 20 9.5Z"
+            fill="var(--warm-white)"
+          />
+          <circle cx="20" cy="19" r="2.75" fill="var(--ink)" opacity="0.88" />
+        </svg>
+      </span>
+      <span
+        className="app-logo-text"
+        style={{
+          fontFamily: 'var(--font-display)',
+          fontWeight: 700,
+          fontSize: s.title,
+          color: 'var(--ink)',
+          letterSpacing: '-0.03em',
+          whiteSpace: 'nowrap',
+        }}
+      >
         Little Aesop
       </span>
-    </div>
+    </Link>
   )
 }
 
@@ -22,13 +56,11 @@ export function AuthCard({ children, title, subtitle }) {
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'var(--cream)',
+      background: 'var(--hero-bg)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       padding: '24px 16px',
-      backgroundImage: `radial-gradient(ellipse at 20% 50%, rgba(200,136,42,0.07) 0%, transparent 60%),
-                        radial-gradient(ellipse at 80% 20%, rgba(45,90,61,0.06) 0%, transparent 50%)`
     }}>
       <div style={{ width: '100%', maxWidth: 420 }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
@@ -36,12 +68,12 @@ export function AuthCard({ children, title, subtitle }) {
             <Logo size="md" />
           </div>
           {title && (
-            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600, color: 'var(--ink)', marginBottom: 6 }}>
+            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, color: 'var(--ink)', marginBottom: 8, letterSpacing: '-0.02em' }}>
               {title}
             </h1>
           )}
           {subtitle && (
-            <p style={{ fontSize: 14, color: 'var(--ink-muted)', lineHeight: 1.5 }}>{subtitle}</p>
+            <p style={{ fontSize: 15, color: 'var(--ink-soft)', lineHeight: 1.5 }}>{subtitle}</p>
           )}
         </div>
         <div style={{
@@ -49,7 +81,7 @@ export function AuthCard({ children, title, subtitle }) {
           borderRadius: 'var(--radius-lg)',
           padding: '32px 28px',
           boxShadow: 'var(--shadow-lg)',
-          border: '1px solid var(--border)'
+          border: '2px solid var(--ink)',
         }}>
           {children}
         </div>
@@ -61,11 +93,11 @@ export function AuthCard({ children, title, subtitle }) {
 export function FormField({ label, id, error, children }) {
   return (
     <div style={{ marginBottom: 18 }}>
-      <label htmlFor={id} style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--ink-soft)', marginBottom: 6, letterSpacing: '0.01em' }}>
+      <label htmlFor={id} style={{ display: 'block', fontSize: 13, fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, letterSpacing: '0.01em' }}>
         {label}
       </label>
       {children}
-      {error && <p style={{ fontSize: 12, color: 'var(--rose)', marginTop: 4 }}>{error}</p>}
+      {error && <p style={{ fontSize: 12, color: 'var(--rose)', marginTop: 4, fontWeight: 600 }}>{error}</p>}
     </div>
   )
 }
@@ -79,9 +111,9 @@ export function Input({ error, style, ...props }) {
       onBlur={e => { setFocused(false); props.onBlur?.(e) }}
       style={{
         width: '100%',
-        padding: '10px 14px',
+        padding: '12px 14px',
         borderRadius: 'var(--radius-sm)',
-        border: `1.5px solid ${error ? 'var(--rose)' : focused ? 'var(--gold)' : 'var(--border-strong)'}`,
+        border: `2px solid ${error ? 'var(--rose)' : focused ? 'var(--ink)' : 'var(--border-strong)'}`,
         background: focused ? 'var(--warm-white)' : 'var(--cream)',
         color: 'var(--ink)',
         fontSize: 15,
@@ -99,9 +131,9 @@ export function Select({ children, style, ...props }) {
       {...props}
       style={{
         width: '100%',
-        padding: '10px 14px',
+        padding: '12px 14px',
         borderRadius: 'var(--radius-sm)',
-        border: '1.5px solid var(--border-strong)',
+        border: '2px solid var(--border-strong)',
         background: 'var(--cream)',
         color: 'var(--ink)',
         fontSize: 15,
@@ -118,28 +150,29 @@ export function Select({ children, style, ...props }) {
 export function Button({ children, variant = 'primary', loading, disabled, style, ...props }) {
   const variants = {
     primary: {
-      background: 'var(--gold)',
-      color: 'var(--warm-white)',
-      border: 'none',
-      fontWeight: 700,
+      background: 'var(--ink)',
+      color: 'var(--cream)',
+      border: '2px solid var(--ink)',
+      fontWeight: 800,
+      boxShadow: 'var(--shadow-bold)',
     },
     secondary: {
       background: 'transparent',
       color: 'var(--ink-soft)',
-      border: '1.5px solid var(--border-strong)',
-      fontWeight: 600,
+      border: '2px solid var(--border-strong)',
+      fontWeight: 700,
     },
     ghost: {
       background: 'transparent',
-      color: 'var(--gold)',
+      color: 'var(--ink)',
       border: 'none',
-      fontWeight: 600,
+      fontWeight: 700,
     },
     danger: {
       background: 'var(--rose-pale)',
       color: 'var(--rose)',
-      border: '1.5px solid rgba(192,83,74,0.2)',
-      fontWeight: 600,
+      border: '2px solid rgba(214,69,69,0.25)',
+      fontWeight: 700,
     }
   }
   return (
@@ -148,8 +181,8 @@ export function Button({ children, variant = 'primary', loading, disabled, style
       disabled={disabled || loading}
       style={{
         ...variants[variant],
-        padding: '10px 20px',
-        borderRadius: 'var(--radius-sm)',
+        padding: '12px 22px',
+        borderRadius: 'var(--radius-pill)',
         fontSize: 15,
         display: 'flex',
         alignItems: 'center',
@@ -159,6 +192,7 @@ export function Button({ children, variant = 'primary', loading, disabled, style
         transition: 'opacity 0.15s, transform 0.1s',
         width: '100%',
         cursor: (disabled || loading) ? 'not-allowed' : 'pointer',
+        whiteSpace: 'nowrap',
         ...style
       }}
     >
@@ -172,21 +206,22 @@ export function Button({ children, variant = 'primary', loading, disabled, style
 
 export function Alert({ type = 'error', children }) {
   const styles = {
-    error: { bg: 'var(--rose-pale)', color: 'var(--rose)', border: 'rgba(192,83,74,0.2)' },
-    success: { bg: 'var(--forest-pale)', color: 'var(--forest)', border: 'rgba(45,90,61,0.2)' },
-    info: { bg: 'var(--gold-pale)', color: 'var(--gold)', border: 'rgba(200,136,42,0.2)' },
+    error: { bg: 'var(--rose-pale)', color: 'var(--rose)', border: 'rgba(214,69,69,0.25)' },
+    success: { bg: 'var(--forest-pale)', color: 'var(--forest)', border: 'rgba(26,107,79,0.25)' },
+    info: { bg: 'var(--gold-pale)', color: 'var(--ink-soft)', border: 'rgba(126, 107, 184, 0.25)' },
   }
   const s = styles[type]
   return (
     <div style={{
       background: s.bg,
       color: s.color,
-      border: `1px solid ${s.border}`,
-      borderRadius: 'var(--radius-sm)',
-      padding: '10px 14px',
+      border: `2px solid ${s.border}`,
+      borderRadius: 'var(--radius-md)',
+      padding: '12px 14px',
       fontSize: 14,
       marginBottom: 16,
-      lineHeight: 1.5
+      lineHeight: 1.5,
+      fontWeight: 600,
     }}>
       {children}
     </div>
@@ -196,9 +231,9 @@ export function Alert({ type = 'error', children }) {
 export function Divider({ label }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0' }}>
-      <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-      {label && <span style={{ fontSize: 12, color: 'var(--ink-muted)', whiteSpace: 'nowrap' }}>{label}</span>}
-      <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+      <div style={{ flex: 1, height: 2, background: 'var(--border)' }} />
+      {label && <span style={{ fontSize: 12, color: 'var(--ink-muted)', whiteSpace: 'nowrap', fontWeight: 600 }}>{label}</span>}
+      <div style={{ flex: 1, height: 2, background: 'var(--border)' }} />
     </div>
   )
 }

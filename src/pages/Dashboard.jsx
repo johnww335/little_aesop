@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { getChildren, createChild, deleteChild, calculateAge, getAvatarEmoji, MAX_CHILDREN } from '../lib/children'
 import { Button, Alert } from '../components/ui'
 import AppHeader from '../components/AppHeader'
@@ -57,7 +57,7 @@ export default function Dashboard() {
   const atLimit = children.length >= MAX_CHILDREN
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--cream)', backgroundImage: `radial-gradient(ellipse at 10% 0%, rgba(200,136,42,0.08) 0%, transparent 50%)` }}>
+    <div style={{ minHeight: '100vh', background: 'var(--cream)', backgroundImage: `radial-gradient(ellipse at 10% 0%, rgba(126,107,184,0.08) 0%, transparent 50%)` }}>
       {/* Header */}
       <AppHeader
         right={(
