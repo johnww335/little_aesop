@@ -314,16 +314,6 @@ export default function StoryReader() {
     )
   }
 
-  const progressLabel = isSinglePage || !rightPage || rightPageNum > pageCount
-    ? `Page ${leftPageNum} of ${pageCount}`
-    : `Pages ${leftPageNum}–${rightPageNum} of ${pageCount}`
-
-  const fullscreenBtnLabel = fullscreen
-    ? 'Exit full screen'
-    : needsHomeScreenInstallForTrueFullscreen()
-      ? 'Immersive mode'
-      : 'Full screen'
-
   return (
     <ReaderShell
       ref={shellRef}
@@ -390,11 +380,16 @@ export default function StoryReader() {
           </div>
         </div>
 
-        <div className={`reader-nav${fullscreen ? ' reader-nav--overlay' : ''}`}>
-          <NavButton onClick={handlePrev} disabled={isFirst} label="← Previous" />
-
-          <div className="reader-progress">
-            <span className="reader-progress-label">{progressLabel}</span>
+        <nav className={`reader-nav${fullscreen ? ' reader-nav--overlay' : ''}`} aria-label="Story navigation">
+          <div className="reader-nav-progress">
+            <div className="reader-progress-meta">
+              <span className="reader-progress-page">
+                {isSinglePage || !rightPage || rightPageNum > pageCount
+                  ? `Page ${leftPageNum}`
+                  : `Pages ${leftPageNum}–${rightPageNum}`}
+              </span>
+              <span className="reader-progress-of">of {pageCount}</span>
+            </div>
             <div className="reader-progress-bar">
               <div
                 className="reader-progress-fill"
@@ -403,34 +398,43 @@ export default function StoryReader() {
             </div>
           </div>
 
+          <NavButton
+            onClick={handlePrev}
+            disabled={isFirst}
+            label="← Previous"
+            shortLabel="← Prev"
+            className="reader-nav-prev"
+          />
+
+          {isLast ? (
+            <button type="button" className="reader-finish reader-nav-next" onClick={() => navigate(-1)}>
+              <span className="reader-nav-btn__full">Finish 🎉</span>
+              <span className="reader-nav-btn__short" aria-hidden="true">Done 🎉</span>
+            </button>
+          ) : (
+            <NavButton
+              onClick={handleNext}
+              disabled={isLast}
+              label="Next →"
+              shortLabel="Next →"
+              className="reader-nav-next"
+            />
+          )}
+
           <button
             type="button"
             className="reader-fullscreen-btn"
             onClick={toggleFullscreen}
             aria-pressed={fullscreen}
           >
-            {fullscreen ? 'Exit full screen' : fullscreenBtnLabel}
+            {fullscreen ? 'Exit full screen' : 'Full screen'}
           </button>
-
-          {isLast ? (
-            <button type="button" className="reader-finish" onClick={() => navigate(-1)}>
-              Finish 🎉
-            </button>
-          ) : (
-            <NavButton onClick={handleNext} disabled={isLast} label="Next →" />
-          )}
-        </div>
+        </nav>
 
         {!fullscreen && (
           <p className="reader-hint">
-            Use ← → arrow keys or swipe to turn pages
-          </p>
-        )}
-
-        {fullscreen && (
-          <p className="reader-hint reader-hint--fullscreen">
-            Swipe left or right to turn pages
-            {needsHomeScreenInstallForTrueFullscreen() && ' · Add to Home Screen for no browser bars'}
+            <span className="reader-hint__desktop">Use ← → arrow keys or swipe to turn pages</span>
+            <span className="reader-hint__mobile">Swipe to turn pages</span>
           </p>
         )}
 
@@ -526,10 +530,16 @@ function StoryPageText({ text, highlightPhrase, sparkleActive }) {
   )
 }
 
-function NavButton({ onClick, disabled, label }) {
+function NavButton({ onClick, disabled, label, shortLabel, className = '' }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className="reader-nav-btn">
-      {label}
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`reader-nav-btn${className ? ` ${className}` : ''}`}
+    >
+      <span className="reader-nav-btn__full">{label}</span>
+      <span className="reader-nav-btn__short" aria-hidden="true">{shortLabel ?? label}</span>
     </button>
   )
 }
@@ -677,14 +687,19 @@ const READER_STYLES = `
   .reader-shell--fullscreen .reader-book-wrap {
     flex: 1;
     width: 100%;
-    padding: 8px 6px 88px;
+    min-height: 0;
+    padding:
+      max(4px, env(safe-area-inset-top))
+      max(6px, env(safe-area-inset-right))
+      max(136px, calc(env(safe-area-inset-bottom) + 128px))
+      max(6px, env(safe-area-inset-left));
     touch-action: pan-y pinch-zoom;
   }
 
   .reader-shell--fullscreen .reader-book {
     width: 100%;
     height: 100%;
-    max-height: none;
+    max-height: 100%;
     min-height: 0;
     border-radius: 4px 8px 8px 4px;
     box-shadow:
@@ -693,30 +708,110 @@ const READER_STYLES = `
       inset 0 0 0 1px rgba(255,252,245,0.06);
   }
 
+  .reader-shell--fullscreen .reader-book--single {
+    border-radius: 10px;
+    height: 100%;
+  }
+
+  .reader-shell--fullscreen .reader-image {
+    object-fit: contain;
+  }
+
+  /* Grid guarantees story text always keeps its own row below the illustration */
+  .reader-shell--fullscreen .reader-book--single .reader-page-single {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+
+  .reader-shell--fullscreen .reader-book--single .reader-illustration {
+    flex: none;
+    min-height: 0;
+    overflow: hidden;
+    padding: 6px 8px 4px;
+  }
+
+  .reader-shell--fullscreen .reader-book--single .reader-text-wrap {
+    flex: none;
+    max-height: none;
+    min-height: 76px;
+    padding: 10px 14px 12px;
+    flex-shrink: 0;
+    background: linear-gradient(180deg, #f7f0e4 0%, #fffdf8 100%);
+    border-top: 1px solid rgba(44, 26, 14, 0.08);
+  }
+
+  .reader-shell--fullscreen .reader-book--single .reader-text {
+    font-size: clamp(15px, 4.2vw, 17px);
+    line-height: 1.5;
+    -webkit-line-clamp: 4;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .reader-shell--fullscreen .reader-text-wrap {
+    max-height: 30%;
+    min-height: 72px;
+    flex-shrink: 0;
+  }
+
+  .reader-shell--fullscreen .reader-text {
+    -webkit-line-clamp: 4;
+  }
+
   .reader-nav--overlay {
     position: fixed;
-    left: max(12px, env(safe-area-inset-left));
-    right: max(12px, env(safe-area-inset-right));
-    bottom: max(10px, env(safe-area-inset-bottom));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    bottom: max(8px, env(safe-area-inset-bottom));
     z-index: 1002;
-    max-width: none;
-    padding: 10px 14px;
+    width: min(300px, calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    max-width: 300px;
+    padding: 8px 10px;
     background: rgba(255, 252, 245, 0.94);
     border-radius: var(--radius-md);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
     backdrop-filter: blur(8px);
   }
 
-  .reader-hint--fullscreen {
-    position: fixed;
-    bottom: max(72px, calc(env(safe-area-inset-bottom) + 62px));
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 1001;
-    color: rgba(255, 252, 245, 0.55);
-    font-size: 11px;
-    pointer-events: none;
-    white-space: nowrap;
+  .reader-nav--overlay .reader-nav-progress {
+    padding: 0;
+    gap: 5px;
+  }
+
+  .reader-nav--overlay .reader-progress-meta {
+    justify-content: space-between;
+  }
+
+  .reader-nav--overlay .reader-progress-page {
+    font-size: 14px;
+  }
+
+  .reader-nav--overlay .reader-progress-of {
+    font-size: 12px;
+  }
+
+  .reader-nav--overlay .reader-progress-bar {
+    height: 4px;
+  }
+
+  .reader-nav--overlay .reader-nav-btn,
+  .reader-nav--overlay .reader-finish,
+  .reader-nav--overlay .reader-fullscreen-btn {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 13px;
+    width: 100%;
+  }
+
+  .reader-nav--overlay .reader-nav-btn__full {
+    display: none;
+  }
+
+  .reader-nav--overlay .reader-nav-btn__short {
+    display: inline;
   }
 
   .reader-book--turn-forward {
@@ -773,6 +868,7 @@ const READER_STYLES = `
   }
 
   .reader-fullscreen-btn {
+    grid-area: fullscreen;
     background: var(--warm-white);
     border: 1.5px solid var(--border-strong);
     border-radius: var(--radius-sm);
@@ -1044,12 +1140,66 @@ const READER_STYLES = `
   }
 
   .reader-nav {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    grid-template-areas: "prev progress fullscreen next";
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+    gap: 12px;
     width: 100%;
     max-width: 680px;
+  }
+
+  .reader-nav-progress {
+    grid-area: progress;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .reader-progress-meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .reader-progress-page {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .reader-progress-of {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-muted);
+  }
+
+  .reader-nav-prev {
+    grid-area: prev;
+  }
+
+  .reader-nav-next {
+    grid-area: next;
+  }
+
+  /* Fullscreen overlay — must follow .reader-nav so grid layout isn't overridden */
+  .reader-nav.reader-nav--overlay {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "progress progress"
+      "prev next"
+      "fullscreen fullscreen";
+    gap: 6px;
+    max-width: 300px;
+    width: min(300px, calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  }
+
+  .reader-nav-btn__short {
+    display: none;
   }
 
   .reader-nav-btn {
@@ -1064,6 +1214,9 @@ const READER_STYLES = `
     font-family: var(--font-body);
     white-space: nowrap;
     transition: opacity 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .reader-nav-btn:disabled {
@@ -1072,25 +1225,9 @@ const READER_STYLES = `
     opacity: 0.4;
   }
 
-  .reader-progress {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .reader-progress-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ink-soft);
-  }
-
   .reader-progress-bar {
     width: 100%;
-    max-width: 200px;
-    height: 4px;
+    height: 5px;
     background: var(--border);
     border-radius: 99px;
     overflow: hidden;
@@ -1098,7 +1235,7 @@ const READER_STYLES = `
 
   .reader-progress-fill {
     height: 100%;
-    background: var(--gold);
+    background: linear-gradient(90deg, var(--gold), var(--gold-light));
     border-radius: 99px;
     transition: width 0.3s ease;
   }
@@ -1114,12 +1251,20 @@ const READER_STYLES = `
     cursor: pointer;
     font-family: var(--font-body);
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .reader-hint {
     font-size: 12px;
     color: var(--ink-muted);
     margin: 0;
+    text-align: center;
+  }
+
+  .reader-hint__mobile {
+    display: none;
   }
 
   .reader-dev-bar {
@@ -1210,7 +1355,42 @@ const READER_STYLES = `
     }
 
     .reader-shell--fullscreen .reader-book-wrap {
-      padding-bottom: max(72px, env(safe-area-inset-bottom));
+      padding-bottom: max(148px, calc(env(safe-area-inset-bottom) + 140px));
+    }
+
+    .reader-nav.reader-nav--overlay {
+      gap: 6px;
+      padding: 8px 10px;
+    }
+
+    .reader-nav.reader-nav--overlay .reader-nav-btn,
+    .reader-nav.reader-nav--overlay .reader-finish,
+    .reader-nav.reader-nav--overlay .reader-fullscreen-btn {
+      min-height: 38px;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .reader-nav.reader-nav--overlay .reader-progress-page {
+      font-size: 14px;
+    }
+
+    .reader-nav.reader-nav--overlay .reader-progress-of {
+      font-size: 12px;
+    }
+
+    .reader-nav.reader-nav--overlay .reader-progress-bar {
+      height: 4px;
+    }
+
+    .reader-shell--fullscreen .reader-book--single .reader-text-wrap {
+      min-height: 80px;
+      padding: 10px 14px 14px;
+    }
+
+    .reader-shell--fullscreen .reader-book--single .reader-text {
+      font-size: clamp(15px, 4.5vw, 17px);
+      -webkit-line-clamp: 5;
     }
 
     .reader-illustration {
@@ -1240,36 +1420,68 @@ const READER_STYLES = `
     }
 
     .reader-nav {
-      flex-wrap: wrap;
-      justify-content: center;
+      grid-template-columns: 1fr 1fr;
+      grid-template-areas:
+        "progress progress"
+        "prev next"
+        "fullscreen fullscreen";
       gap: 10px;
-      padding-bottom: env(safe-area-inset-bottom);
+      padding-bottom: max(4px, env(safe-area-inset-bottom));
+    }
+
+    .reader-nav-progress {
+      padding: 4px 2px 2px;
+    }
+
+    .reader-progress-meta {
+      justify-content: space-between;
+    }
+
+    .reader-progress-page {
+      font-size: 18px;
+    }
+
+    .reader-progress-of {
+      font-size: 14px;
+    }
+
+    .reader-progress-bar {
+      height: 6px;
     }
 
     .reader-nav-btn,
     .reader-finish,
     .reader-fullscreen-btn {
-      min-height: 44px;
+      min-height: 48px;
       padding: 12px 16px;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .reader-nav-btn__full {
+      display: none;
+    }
+
+    .reader-nav-btn__short {
+      display: inline;
     }
 
     .reader-fullscreen-btn {
-      order: 2;
+      font-size: 14px;
+      color: var(--ink);
     }
 
-    .reader-progress {
-      order: -1;
-      width: 100%;
+    .reader-hint__desktop {
+      display: none;
     }
 
-    .reader-progress-bar {
-      max-width: none;
+    .reader-hint__mobile {
+      display: inline;
     }
 
     .reader-hint {
-      font-size: 12px;
-      text-align: center;
-      padding: 0 8px;
+      font-size: 11px;
+      padding: 0 12px;
     }
   }
 `

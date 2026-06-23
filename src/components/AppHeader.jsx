@@ -10,18 +10,6 @@ export function BookshelfButton({ childId }) {
       type="button"
       className="app-header-bookshelf"
       onClick={() => navigate(`/child/${childId}/bookshelf`)}
-      style={{
-        background: 'var(--gold-bold)',
-        border: '2px solid var(--ink)',
-        borderRadius: 'var(--radius-sm)',
-        padding: '6px 14px',
-        fontSize: 13,
-        fontWeight: 600,
-        color: 'var(--ink-soft)',
-        cursor: 'pointer',
-        fontFamily: 'var(--font-body)',
-        whiteSpace: 'nowrap',
-      }}
     >
       Bookshelf
     </button>

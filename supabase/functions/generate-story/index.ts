@@ -2,7 +2,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const LOG = "[generate-story]";
-const FUNCTION_VERSION = "2026-06-23";
+const FUNCTION_VERSION = "2026-06-24";
 const MAX_BLUEPRINT_ATTEMPTS = 3;
 const IMAGE_BATCH_SIZE = 5;
 /** Chained auto-runs use one page per edge invocation to stay within wall-clock limits. */
@@ -619,13 +619,15 @@ function normalizeStoryBlueprint(raw: StoryBlueprint, inputs: StoryInput[]): Sto
     .slice(0, PAGE_COUNT)
     .map((beat, i) => ({
       page: i + 1,
-      beat: beat.beat?.trim() || `Story beat for page ${i + 1}`,
-      storyJob: beat.storyJob?.trim() || "rising_action",
-      inputsUsed: (beat.inputsUsed ?? []).filter((a) => allowedAnswers.has(normalizeInputToken(a))),
-      charactersOnStage: beat.charactersOnStage ?? [],
-      setting: beat.setting?.trim() || raw.visualBible?.primarySetting || "story setting",
-      sceneBrief: beat.sceneBrief?.trim() || beat.beat?.trim() || "",
-      mood: beat.mood?.trim() || "warm",
+      beat: safeTrim(beat.beat, `Story beat for page ${i + 1}`),
+      storyJob: safeTrim(beat.storyJob, "rising_action"),
+      inputsUsed: safeStringArray(beat.inputsUsed).filter((a) =>
+        allowedAnswers.has(normalizeInputToken(a))
+      ),
+      charactersOnStage: safeStringArray(beat.charactersOnStage),
+      setting: safeTrim(beat.setting, safeTrim(raw.visualBible?.primarySetting, "story setting")),
+      sceneBrief: safeTrim(beat.sceneBrief, safeTrim(beat.beat, "")),
+      mood: safeTrim(beat.mood, "warm"),
     }));
 
   while (storyboard.length < PAGE_COUNT) {
@@ -635,15 +637,17 @@ function normalizeStoryBlueprint(raw: StoryBlueprint, inputs: StoryInput[]): Sto
       beat: `The adventure continues toward the ending.`,
       storyJob: page >= 16 ? "resolution" : "rising_action",
       inputsUsed: [],
-      charactersOnStage: raw.characters?.[0]?.name ? [raw.characters[0].name] : [],
-      setting: raw.visualBible?.primarySetting ?? "story setting",
+      charactersOnStage: raw.characters?.[0]?.name
+        ? [safeTrim(raw.characters[0].name)]
+        : [],
+      setting: safeTrim(raw.visualBible?.primarySetting, "story setting"),
       sceneBrief: "Hero continues the adventure",
       mood: "hopeful",
     });
   }
 
   const inputMap = (raw.inputMap ?? []).filter((e) =>
-    allowedAnswers.has(normalizeInputToken(e.answer))
+    allowedAnswers.has(normalizeInputToken(safeTrim(e.answer))),
   );
   for (const input of inputs) {
     const token = normalizeInputToken(input.answer);
@@ -660,31 +664,39 @@ function normalizeStoryBlueprint(raw: StoryBlueprint, inputs: StoryInput[]): Sto
   }
 
   return {
-    title: raw.title?.trim() || "Your Story",
+    title: safeTrim(raw.title, "Your Story"),
     architecture: {
-      protagonistGoal: raw.architecture?.protagonistGoal?.trim() || "Go on an adventure",
-      centralProblem: raw.architecture?.centralProblem?.trim() || "Something stands in the way",
-      resolution: raw.architecture?.resolution?.trim() || "The hero succeeds and feels proud",
-      act1Summary: raw.architecture?.act1Summary?.trim() || "Setup",
-      act2Summary: raw.architecture?.act2Summary?.trim() || "Rising action",
-      act3Summary: raw.architecture?.act3Summary?.trim() || "Resolution",
+      protagonistGoal: safeTrim(raw.architecture?.protagonistGoal, "Go on an adventure"),
+      centralProblem: safeTrim(raw.architecture?.centralProblem, "Something stands in the way"),
+      resolution: safeTrim(raw.architecture?.resolution, "The hero succeeds and feels proud"),
+      act1Summary: safeTrim(raw.architecture?.act1Summary, "Setup"),
+      act2Summary: safeTrim(raw.architecture?.act2Summary, "Rising action"),
+      act3Summary: safeTrim(raw.architecture?.act3Summary, "Resolution"),
     },
     visualBible: {
-      primarySetting: raw.visualBible?.primarySetting?.trim() || "A friendly storybook world",
-      settingRules: raw.visualBible?.settingRules?.trim() || "Keep the setting consistent on every page",
-      paletteNotes: raw.visualBible?.paletteNotes?.trim() || "Soft muted watercolor storybook palette",
+      primarySetting: safeTrim(raw.visualBible?.primarySetting, "A friendly storybook world"),
+      settingRules: safeTrim(
+        raw.visualBible?.settingRules,
+        "Keep the setting consistent on every page",
+      ),
+      paletteNotes: safeTrim(
+        raw.visualBible?.paletteNotes,
+        "Soft muted watercolor storybook palette",
+      ),
     },
     characters: (raw.characters ?? []).map((c) => ({
-      name: c.name,
-      role: c.role,
-      introducedOnPage: Math.min(Math.max(1, c.introducedOnPage ?? 1), PAGE_COUNT),
-      appearance: c.appearance,
+      name: safeTrim(c.name, "Hero"),
+      role: safeTrim(c.role, "protagonist"),
+      introducedOnPage: Math.min(Math.max(1, Number(c.introducedOnPage) || 1), PAGE_COUNT),
+      appearance: safeTrim(c.appearance, "A friendly storybook character"),
     })),
     inputMap: inputMap.map((e) => ({
-      answer: e.answer,
-      question: questionByAnswer.get(normalizeInputToken(e.answer)) ?? e.question,
-      narrativeJob: e.narrativeJob,
-      pages: (e.pages ?? []).filter((p) => p >= 1 && p <= PAGE_COUNT),
+      answer: safeTrim(e.answer),
+      question: questionByAnswer.get(normalizeInputToken(safeTrim(e.answer))) ?? safeTrim(e.question),
+      narrativeJob: safeTrim(e.narrativeJob, "woven into the adventure"),
+      pages: (Array.isArray(e.pages) ? e.pages : [])
+        .map((p) => Number(p))
+        .filter((p) => Number.isFinite(p) && p >= 1 && p <= PAGE_COUNT),
     })),
     storyboard,
   };
@@ -1206,6 +1218,26 @@ function formatInputsForMetadata(inputs: StoryInput[]): string {
 
 function normalizeInputToken(value: string): string {
   return value.toLowerCase().trim();
+}
+
+/** GPT JSON fields are not always strings — coerce safely before .trim(). */
+function safeTrim(value: unknown, fallback = ""): string {
+  if (value == null) return fallback;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || fallback;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
+}
+
+function safeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => safeTrim(item))
+    .filter(Boolean);
 }
 
 function sanitizeStoryMetadata(metadata: StoryMetadata, inputs: StoryInput[]): StoryMetadata {
@@ -2435,8 +2467,11 @@ async function runGeneration(
 
   const useTemplateFallback = (reason: string) => {
     if (!allowTemplate) {
+      const needsKeyHint = /OPENAI_API_KEY|not set on edge function/i.test(reason);
       throw new Error(
-        reason + " — Set OPENAI_API_KEY in Supabase Edge Function secrets and redeploy generate-story."
+        needsKeyHint
+          ? `${reason} — Set OPENAI_API_KEY in Supabase Edge Function secrets and redeploy generate-story.`
+          : reason,
       );
     }
     logError("Run", "Using template story (allowTemplate=true)", { reason });
