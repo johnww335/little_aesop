@@ -14,6 +14,14 @@
 --     sourceStories: [{ storyId, title, rating, awkwardInputs }]
 --     createdAt: ISO timestamp
 --
+-- Storyboard-first pipeline (function version 2026-06-23+) also stores:
+--
+--   story_metadata.architecture     -- goal, problem, resolution, act summaries
+--   story_metadata.storyboard       -- per-page beats, sceneBrief, setting, mood
+--   story_metadata.visualBible      -- primarySetting, settingRules, paletteNotes
+--   story_metadata.inputMap         -- how each child answer drives the plot
+--   story_metadata.blueprintReview  -- { passed, rating, attempts, feedback }
+--
 -- Example query:
 --
 -- SELECT

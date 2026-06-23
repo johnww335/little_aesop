@@ -41,6 +41,22 @@ if (applied) {
   console.log(JSON.stringify(applied, null, 2))
 }
 
+const blueprint = story.story_metadata?.blueprintReview
+if (blueprint) {
+  console.log('\n=== blueprintReview ===')
+  console.log(JSON.stringify(blueprint, null, 2))
+}
+
+const storyboard = story.story_metadata?.storyboard
+if (storyboard?.length) {
+  console.log('\n=== storyboard (first 5 pages) ===')
+  storyboard.slice(0, 5).forEach((b) => {
+    console.log(`Page ${b.page}: ${b.beat}`)
+    console.log(`  scene: ${b.sceneBrief}`)
+  })
+  if (storyboard.length > 5) console.log(`  ... ${storyboard.length} pages total`)
+}
+
 const critic = story.story_metadata?.criticFeedback
 console.log('=== Story ===')
 console.log(JSON.stringify({

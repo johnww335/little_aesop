@@ -2,7 +2,8 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const LOG = "[generate-story]";
-const FUNCTION_VERSION = "2026-06-22";
+const FUNCTION_VERSION = "2026-06-23";
+const MAX_BLUEPRINT_ATTEMPTS = 3;
 const IMAGE_BATCH_SIZE = 5;
 /** Chained auto-runs use one page per edge invocation to stay within wall-clock limits. */
 const CHAIN_PAGE_SIZE = 1;
@@ -67,6 +68,9 @@ type StoryMeta = {
   reviewAttempts?: number;
   reviewSkipped?: boolean;
   reviewFeedback?: string;
+  blueprintPassed?: boolean;
+  blueprintAttempts?: number;
+  blueprintRating?: number;
 };
 
 type StoryCharacter = {
@@ -108,6 +112,66 @@ type AppliedPriorLessons = {
   createdAt: string;
 };
 
+type StoryArchitecture = {
+  protagonistGoal: string;
+  centralProblem: string;
+  resolution: string;
+  act1Summary: string;
+  act2Summary: string;
+  act3Summary: string;
+};
+
+type VisualBible = {
+  primarySetting: string;
+  settingRules: string;
+  paletteNotes: string;
+};
+
+type StoryboardBeat = {
+  page: number;
+  beat: string;
+  storyJob: string;
+  inputsUsed: string[];
+  charactersOnStage: string[];
+  setting: string;
+  sceneBrief: string;
+  mood: string;
+};
+
+type InputMapEntry = {
+  answer: string;
+  question: string;
+  narrativeJob: string;
+  pages: number[];
+};
+
+type StoryBlueprint = {
+  title: string;
+  architecture: StoryArchitecture;
+  visualBible: VisualBible;
+  characters: StoryCharacter[];
+  inputMap: InputMapEntry[];
+  storyboard: StoryboardBeat[];
+};
+
+type BlueprintReview = {
+  passes: boolean;
+  rating: number;
+  hasClearConflict: boolean;
+  inputsDrivePlot: boolean;
+  noFillerBeats: boolean;
+  coherentSetting: boolean;
+  feedback: string;
+  missingInputs: string[];
+};
+
+type BlueprintReviewRecord = {
+  passed: boolean;
+  rating: number;
+  attempts: number;
+  feedback: string;
+};
+
 type StoryMetadata = {
   characters: StoryCharacter[];
   plotSummary: string;
@@ -117,6 +181,11 @@ type StoryMetadata = {
   userInputs: UserInput[];
   illustrationPageLimit?: number;
   appliedPriorLessons?: AppliedPriorLessons;
+  architecture?: StoryArchitecture;
+  visualBible?: VisualBible;
+  storyboard?: StoryboardBeat[];
+  inputMap?: InputMapEntry[];
+  blueprintReview?: BlueprintReviewRecord;
 };
 
 type PriorStoryLessonsResult = {
@@ -445,6 +514,561 @@ function buildRevisionFeedback(
     );
   }
   return parts.filter(Boolean).join(" ");
+}
+
+function buildBlueprintSystemPrompt(context: StoryContext, attempt: number): string {
+  const escalation = attempt <= 1
+    ? ""
+    : attempt === 2
+      ? "\n\nIMPORTANT — the previous blueprint failed review. Give the hero a clear WANT, a real OBSTACLE, and a satisfying PAYOFF. Every child answer must drive the plot — not appear as random objects."
+      : "\n\nCRITICAL — multiple blueprint attempts failed. Keep it simple: one hero, one setting, one problem to solve. Each answer is a clue, tool, ally, or reward — never a bare noun dropped into a scene.";
+
+  const priorLessons = context.priorStoryLessons
+    ? `\n\nApply these lessons from ${context.childName}'s past stories:\n${context.priorStoryLessons}`
+    : "";
+
+  return `You are a children's book story architect planning a ${PAGE_COUNT}-page picture book for ${context.childName}, age ${context.childAge}.
+${ageWritingGuide(context.childAge)}
+
+Plan the story STRUCTURE only — not final prose. Return ONLY JSON:
+{
+  "title": "Story title",
+  "architecture": {
+    "protagonistGoal": "What the hero wants at the start",
+    "centralProblem": "The obstacle or mystery blocking the goal",
+    "resolution": "How the story resolves emotionally and plot-wise",
+    "act1Summary": "Pages 1-5: setup and inciting incident",
+    "act2Summary": "Pages 6-15: rising action, discoveries, setbacks",
+    "act3Summary": "Pages 16-20: climax and satisfying ending"
+  },
+  "visualBible": {
+    "primarySetting": "One consistent world (e.g. seaside beach and cave — NOT beach AND underwater)",
+    "settingRules": "Rules illustrators must follow to keep setting consistent",
+    "paletteNotes": "3-5 dominant colors and art mood"
+  },
+  "characters": [
+    {
+      "name": "character name",
+      "role": "protagonist | sidekick | etc",
+      "introducedOnPage": 1,
+      "appearance": "Fixed visual design — exact colors, shapes, features for every illustration"
+    }
+  ],
+  "inputMap": [
+    {
+      "answer": "exact child answer from list below",
+      "question": "matching question from list below",
+      "narrativeJob": "How this answer drives plot (clue, setting, ally, tool, reward, etc.)",
+      "pages": [3, 10]
+    }
+  ],
+  "storyboard": [
+    {
+      "page": 1,
+      "beat": "One sentence: what happens on this page",
+      "storyJob": "setup | rising_action | obstacle | discovery | climax | resolution",
+      "inputsUsed": [],
+      "charactersOnStage": ["Hero name"],
+      "setting": "Where this page takes place",
+      "sceneBrief": "What the illustration should show — composition, action, key props",
+      "mood": "emotional tone"
+    }
+  ]
+}
+
+Rules:
+- storyboard must have EXACTLY ${PAGE_COUNT} entries, pages 1 through ${PAGE_COUNT}
+- Every page beat must advance plot or emotion — NO filler beats like "they were glad" or "the adventure was amazing"
+- architecture must have real conflict: goal + obstacle + payoff (not just pleasant exploration)
+- inputMap must include EVERY child answer listed below with narrativeJob and pages where it pays off
+- inputsUsed in storyboard must only contain answers from the child answer list
+- For user_input beats, weave answers as plot devices (a key unlocks a door, a number marks eleven steps, etc.) — NOT random objects appearing
+- visualBible.primarySetting must be ONE coherent world — pick beach OR underwater, not both
+- characters.appearance must be specific enough for illustration consistency (exact colors, never vague)
+- sidekicks introduced later must have introducedOnPage matching their first storyboard appearance
+- Pages 1-5 = setup, 6-15 = rising action, 16-20 = climax and resolution${escalation}${priorLessons}`;
+}
+
+function formatBlueprintForReview(blueprint: StoryBlueprint): string {
+  const lines = [
+    `Title: ${blueprint.title}`,
+    `Goal: ${blueprint.architecture.protagonistGoal}`,
+    `Problem: ${blueprint.architecture.centralProblem}`,
+    `Resolution: ${blueprint.architecture.resolution}`,
+    `Setting: ${blueprint.visualBible.primarySetting}`,
+    `Setting rules: ${blueprint.visualBible.settingRules}`,
+    "",
+    "Input map:",
+    ...blueprint.inputMap.map((e) =>
+      `- "${e.answer}" (${e.narrativeJob}) on pages ${e.pages.join(", ")}`
+    ),
+    "",
+    "Storyboard:",
+    ...blueprint.storyboard.map((b) =>
+      `Page ${b.page} [${b.storyJob}]: ${b.beat}${b.inputsUsed.length ? ` (inputs: ${b.inputsUsed.join(", ")})` : ""} | Setting: ${b.setting} | Scene: ${b.sceneBrief}`
+    ),
+  ];
+  return lines.join("\n");
+}
+
+function normalizeStoryBlueprint(raw: StoryBlueprint, inputs: StoryInput[]): StoryBlueprint {
+  const allowedAnswers = new Set(inputs.map((i) => normalizeInputToken(i.answer)));
+  const questionByAnswer = new Map(inputs.map((i) => [normalizeInputToken(i.answer), i.question]));
+
+  const storyboard = (raw.storyboard ?? [])
+    .slice(0, PAGE_COUNT)
+    .map((beat, i) => ({
+      page: i + 1,
+      beat: beat.beat?.trim() || `Story beat for page ${i + 1}`,
+      storyJob: beat.storyJob?.trim() || "rising_action",
+      inputsUsed: (beat.inputsUsed ?? []).filter((a) => allowedAnswers.has(normalizeInputToken(a))),
+      charactersOnStage: beat.charactersOnStage ?? [],
+      setting: beat.setting?.trim() || raw.visualBible?.primarySetting || "story setting",
+      sceneBrief: beat.sceneBrief?.trim() || beat.beat?.trim() || "",
+      mood: beat.mood?.trim() || "warm",
+    }));
+
+  while (storyboard.length < PAGE_COUNT) {
+    const page = storyboard.length + 1;
+    storyboard.push({
+      page,
+      beat: `The adventure continues toward the ending.`,
+      storyJob: page >= 16 ? "resolution" : "rising_action",
+      inputsUsed: [],
+      charactersOnStage: raw.characters?.[0]?.name ? [raw.characters[0].name] : [],
+      setting: raw.visualBible?.primarySetting ?? "story setting",
+      sceneBrief: "Hero continues the adventure",
+      mood: "hopeful",
+    });
+  }
+
+  const inputMap = (raw.inputMap ?? []).filter((e) =>
+    allowedAnswers.has(normalizeInputToken(e.answer))
+  );
+  for (const input of inputs) {
+    const token = normalizeInputToken(input.answer);
+    if (!inputMap.some((e) => normalizeInputToken(e.answer) === token)) {
+      inputMap.push({
+        answer: input.answer,
+        question: input.question,
+        narrativeJob: "woven into the adventure",
+        pages: storyboard
+          .filter((b) => b.inputsUsed.some((a) => normalizeInputToken(a) === token))
+          .map((b) => b.page),
+      });
+    }
+  }
+
+  return {
+    title: raw.title?.trim() || "Your Story",
+    architecture: {
+      protagonistGoal: raw.architecture?.protagonistGoal?.trim() || "Go on an adventure",
+      centralProblem: raw.architecture?.centralProblem?.trim() || "Something stands in the way",
+      resolution: raw.architecture?.resolution?.trim() || "The hero succeeds and feels proud",
+      act1Summary: raw.architecture?.act1Summary?.trim() || "Setup",
+      act2Summary: raw.architecture?.act2Summary?.trim() || "Rising action",
+      act3Summary: raw.architecture?.act3Summary?.trim() || "Resolution",
+    },
+    visualBible: {
+      primarySetting: raw.visualBible?.primarySetting?.trim() || "A friendly storybook world",
+      settingRules: raw.visualBible?.settingRules?.trim() || "Keep the setting consistent on every page",
+      paletteNotes: raw.visualBible?.paletteNotes?.trim() || "Soft muted watercolor storybook palette",
+    },
+    characters: (raw.characters ?? []).map((c) => ({
+      name: c.name,
+      role: c.role,
+      introducedOnPage: Math.min(Math.max(1, c.introducedOnPage ?? 1), PAGE_COUNT),
+      appearance: c.appearance,
+    })),
+    inputMap: inputMap.map((e) => ({
+      answer: e.answer,
+      question: questionByAnswer.get(normalizeInputToken(e.answer)) ?? e.question,
+      narrativeJob: e.narrativeJob,
+      pages: (e.pages ?? []).filter((p) => p >= 1 && p <= PAGE_COUNT),
+    })),
+    storyboard,
+  };
+}
+
+async function generateStoryBlueprint(
+  inputs: StoryInput[],
+  openaiKey: string,
+  context: StoryContext,
+  attempt: number,
+  revisionFeedback?: string,
+): Promise<StoryBlueprint> {
+  const storyBrief = formatStoryBrief(inputs);
+  const revisionNote = revisionFeedback
+    ? `\n\nFix these issues from the previous blueprint:\n${revisionFeedback}`
+    : "";
+
+  log("Blueprint", "Requesting story architecture and storyboard", {
+    attempt,
+    childAge: context.childAge,
+    inputCount: inputs.length,
+  });
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${openaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      max_tokens: 4096,
+      messages: [
+        { role: "system", content: buildBlueprintSystemPrompt(context, attempt) },
+        {
+          role: "user",
+          content: `Child answers (EVERY answer must appear in inputMap and drive the plot):\n${storyBrief}${revisionNote}`,
+        },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data?.error?.message || `Blueprint API error (${response.status})`);
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Blueprint API returned no content");
+
+  const blueprint = normalizeStoryBlueprint(JSON.parse(content) as StoryBlueprint, inputs);
+  log("Blueprint", "Storyboard ready", {
+    title: blueprint.title,
+    beatCount: blueprint.storyboard.length,
+    characterCount: blueprint.characters.length,
+    inputMapCount: blueprint.inputMap.length,
+  });
+  return blueprint;
+}
+
+async function reviewStoryBlueprint(
+  blueprint: StoryBlueprint,
+  inputs: StoryInput[],
+  context: StoryContext,
+  openaiKey: string,
+): Promise<BlueprintReview> {
+  const answerList = inputs.map((i) => i.answer).join(", ");
+
+  log("Blueprint", "Reviewing storyboard structure", { title: blueprint.title });
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${openaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      max_tokens: 600,
+      messages: [
+        {
+          role: "system",
+          content: `You are a demanding children's book editor reviewing a STORYBOARD (structure only) for ${context.childName}, age ${context.childAge}.
+
+Return ONLY JSON:
+{
+  "rating": 75,
+  "hasClearConflict": true,
+  "inputsDrivePlot": true,
+  "noFillerBeats": true,
+  "coherentSetting": true,
+  "feedback": "specific structural problems to fix",
+  "missingInputs": ["answers not driving plot"]
+}
+
+Scoring (use full range — most AI storyboards are 55–74):
+- 85+: Strong arc, every answer has a narrative job, no filler beats, one coherent setting
+- 70–84: Usable with flaws
+- Below 70: Weak — checklist inputs, no real obstacle, or filler pages
+
+Check:
+1. hasClearConflict — protagonist goal, central problem, and resolution are clear and connected
+2. inputsDrivePlot — EVERY answer (${answerList}) drives plot via inputMap; not bare nouns dropped in
+3. noFillerBeats — pages 6–15 advance plot; no empty beats like "they were glad" or "it was amazing"
+4. coherentSetting — one primary world; no contradictory settings (e.g. beach and underwater without explanation)
+
+Fail any check if not clearly satisfied.`,
+        },
+        {
+          role: "user",
+          content: formatBlueprintForReview(blueprint),
+        },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data?.error?.message || `Blueprint review API error (${response.status})`);
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Blueprint review returned no content");
+
+  const review = JSON.parse(content) as BlueprintReview;
+  review.rating = Math.min(100, Math.max(0, Math.round(review.rating ?? 0)));
+  review.hasClearConflict = Boolean(review.hasClearConflict);
+  review.inputsDrivePlot = Boolean(review.inputsDrivePlot);
+  review.noFillerBeats = Boolean(review.noFillerBeats);
+  review.coherentSetting = Boolean(review.coherentSetting);
+  review.missingInputs = review.missingInputs ?? [];
+  review.feedback = review.feedback ?? "";
+  review.passes = review.hasClearConflict
+    && review.inputsDrivePlot
+    && review.noFillerBeats
+    && review.coherentSetting
+    && review.rating >= 72;
+
+  log("Blueprint", "Storyboard review result", {
+    passes: review.passes,
+    rating: review.rating,
+    hasClearConflict: review.hasClearConflict,
+    inputsDrivePlot: review.inputsDrivePlot,
+    noFillerBeats: review.noFillerBeats,
+    coherentSetting: review.coherentSetting,
+    missingInputs: review.missingInputs,
+  });
+
+  return review;
+}
+
+function buildBlueprintRevisionFeedback(review: BlueprintReview, attempt: number): string {
+  const parts: string[] = [];
+  if (review.feedback) parts.push(review.feedback);
+
+  if (!review.hasClearConflict) {
+    parts.push(
+      attempt >= 2
+        ? "CRITICAL: Give the hero a clear WANT, a real OBSTACLE, and a satisfying PAYOFF by page 20."
+        : "Add clear goal, obstacle, and resolution to the architecture.",
+    );
+  }
+  if (!review.inputsDrivePlot) {
+    parts.push(
+      `Make every child answer drive the plot: ${review.missingInputs.join(", ") || "all answers"}. Use answers as clues, settings, allies, tools, or rewards — not random objects.`,
+    );
+  }
+  if (!review.noFillerBeats) {
+    parts.push("Remove filler beats in pages 6–15. Every page must introduce action, discovery, or emotion.");
+  }
+  if (!review.coherentSetting) {
+    parts.push("Pick ONE primary setting and apply visualBible.settingRules consistently on every page.");
+  }
+  if (review.rating < 72) {
+    parts.push(`Blueprint rated ${review.rating}/100 — strengthen the middle act and ending payoff.`);
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+async function generateBlueprintWithReview(
+  inputs: StoryInput[],
+  openaiKey: string,
+  context: StoryContext,
+): Promise<{ blueprint: StoryBlueprint; review: BlueprintReview; attempts: number }> {
+  let revisionFeedback = context.revisionFeedback;
+  let lastReview: BlueprintReview | null = null;
+
+  for (let attempt = 1; attempt <= MAX_BLUEPRINT_ATTEMPTS; attempt++) {
+    const blueprint = await generateStoryBlueprint(inputs, openaiKey, context, attempt, revisionFeedback);
+    const review = await reviewStoryBlueprint(blueprint, inputs, context, openaiKey);
+    lastReview = review;
+
+    if (review.passes) {
+      log("Blueprint", "Storyboard approved — proceeding to prose", { attempt, rating: review.rating });
+      return { blueprint, review, attempts: attempt };
+    }
+
+    revisionFeedback = buildBlueprintRevisionFeedback(review, attempt);
+    log("Blueprint", `Storyboard review failed — revising (${attempt}/${MAX_BLUEPRINT_ATTEMPTS})`, {
+      rating: review.rating,
+      revisionFeedback: revisionFeedback.slice(0, 200),
+    });
+  }
+
+  throw new Error(
+    `Storyboard did not pass review after ${MAX_BLUEPRINT_ATTEMPTS} attempts: ${lastReview?.feedback || "Unknown"}`,
+  );
+}
+
+async function expandBlueprintToProse(
+  blueprint: StoryBlueprint,
+  inputs: StoryInput[],
+  context: StoryContext,
+  openaiKey: string,
+  revisionFeedback?: string,
+): Promise<StoryDraft> {
+  const beatsText = blueprint.storyboard
+    .map((b) => `Page ${b.page}: ${b.beat} [${b.mood}]`)
+    .join("\n");
+  const answerList = inputs.map((i) => i.answer).join(", ");
+  const revisionNote = revisionFeedback
+    ? `\n\nFix these prose issues while keeping storyboard beats unchanged:\n${revisionFeedback}`
+    : "";
+
+  log("Text", "Expanding approved storyboard to page prose", { title: blueprint.title });
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${openaiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "system",
+          content: `You write final picture-book page text for ${context.childName}, age ${context.childAge}.
+${ageWritingGuide(context.childAge)}
+
+Rules:
+- Follow the approved storyboard EXACTLY — same events on each page, same order
+- Write exactly ${PAGE_COUNT} pages, 1-2 short sentences each
+- Warm, playful, fun to read aloud
+- NEVER quote the original prompt questions
+- NEVER add new plot events not in the storyboard
+- Child answers (${answerList}) must appear naturally where the storyboard specifies
+- Return ONLY JSON: { "title": "${blueprint.title}", "pages": ["...", ...] }`,
+        },
+        {
+          role: "user",
+          content: `Title: ${blueprint.title}\n\nApproved storyboard:\n${beatsText}${revisionNote}`,
+        },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data?.error?.message || `Prose expansion API error (${response.status})`);
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Prose expansion returned no content");
+
+  const story = JSON.parse(content) as StoryDraft;
+  if (!story.pages?.length) throw new Error("Prose expansion returned invalid format");
+
+  while (story.pages.length < PAGE_COUNT) {
+    const beat = blueprint.storyboard[story.pages.length];
+    story.pages.push(beat?.beat ?? "The adventure continued.");
+  }
+  story.pages = story.pages.slice(0, PAGE_COUNT);
+  story.title = story.title || blueprint.title;
+
+  log("Text", "Prose expansion complete", { pageCount: story.pages.length });
+  return story;
+}
+
+function blueprintToStoryMetadata(
+  blueprint: StoryBlueprint,
+  review: BlueprintReview,
+  inputs: StoryInput[],
+  attempts: number,
+): StoryMetadata {
+  const plotPoints: StoryPlotPoint[] = [];
+
+  for (const beat of blueprint.storyboard) {
+    plotPoints.push({
+      page: beat.page,
+      description: beat.beat,
+      type: "plot",
+    });
+    for (const answer of beat.inputsUsed) {
+      plotPoints.push({
+        page: beat.page,
+        description: beat.beat,
+        type: "user_input",
+        userInput: answer,
+      });
+    }
+  }
+
+  const metadata: StoryMetadata = {
+    characters: blueprint.characters,
+    plotSummary: `${blueprint.architecture.protagonistGoal} — ${blueprint.architecture.centralProblem} — ${blueprint.architecture.resolution}`,
+    criticFeedback: {
+      rating: review.rating,
+      faults: review.passes ? "" : review.feedback,
+      improvements: review.passes
+        ? "Storyboard passed structural review before prose and illustrations."
+        : review.feedback,
+      inputsFitNaturally: review.inputsDrivePlot ? "items_make_sense" : "items_feel_out_of_place",
+    },
+    plotPoints,
+    paletteNotes: blueprint.visualBible.paletteNotes,
+    userInputs: inputs.map((i) => ({ question: i.question, answer: i.answer })),
+    architecture: blueprint.architecture,
+    visualBible: blueprint.visualBible,
+    storyboard: blueprint.storyboard,
+    inputMap: blueprint.inputMap,
+    blueprintReview: {
+      passed: review.passes,
+      rating: review.rating,
+      attempts,
+      feedback: review.feedback,
+    },
+  };
+
+  return sanitizeStoryMetadata(metadata, inputs);
+}
+
+async function generateStoryFromBlueprint(
+  inputs: StoryInput[],
+  openaiKey: string,
+  context: StoryContext,
+): Promise<{
+  title: string;
+  pages: string[];
+  meta: StoryMeta;
+  blueprint: StoryBlueprint;
+  metadata: StoryMetadata;
+}> {
+  const { blueprint, review, attempts } = await generateBlueprintWithReview(inputs, openaiKey, context);
+  let metadata = blueprintToStoryMetadata(blueprint, review, inputs, attempts);
+  let story = await expandBlueprintToProse(blueprint, inputs, context, openaiKey);
+
+  let proseReview = await reviewStory(story, inputs, context, openaiKey);
+  if (!proseReview.passes) {
+    log("Review", "Prose review failed after storyboard — regenerating prose once", {
+      feedback: proseReview.feedback,
+    });
+    story = await expandBlueprintToProse(
+      blueprint,
+      inputs,
+      context,
+      openaiKey,
+      buildRevisionFeedback(proseReview, inputs, context, 1),
+    );
+    proseReview = await reviewStory(story, inputs, context, openaiKey);
+  }
+
+  metadata = alignUserInputPagesToStory(story, metadata);
+
+  return {
+    title: story.title,
+    pages: story.pages,
+    blueprint,
+    metadata,
+    meta: {
+      originalPageCount: story.pages.length,
+      wasPadded: false,
+      retried: false,
+      reviewPassed: proseReview.passes,
+      reviewAttempts: 1,
+      blueprintPassed: review.passes,
+      blueprintAttempts: attempts,
+      blueprintRating: review.rating,
+    },
+  };
 }
 
 function resolveDallePageLimit(requested: unknown, pageCount: number): number {
@@ -813,6 +1437,24 @@ function buildPageIllustrationRules(metadata: StoryMetadata, pageNumber: number)
       lines.push(`- ${formatPlotPointLabel(p)}`);
     }
   }
+
+  const boardBeat = metadata.storyboard?.find((b) => b.page === pageNumber);
+  if (boardBeat) {
+    lines.push(`Storyboard scene brief (illustrate this): ${boardBeat.sceneBrief}`);
+    lines.push(`Setting for this page: ${boardBeat.setting}`);
+    lines.push(`Mood: ${boardBeat.mood}`);
+    if (boardBeat.charactersOnStage.length) {
+      lines.push(`Characters on stage: ${boardBeat.charactersOnStage.join(", ")}`);
+    }
+  }
+
+  if (metadata.visualBible?.settingRules) {
+    lines.push(`Setting consistency: ${metadata.visualBible.settingRules}`);
+  }
+  if (metadata.visualBible?.primarySetting) {
+    lines.push(`Primary world: ${metadata.visualBible.primarySetting}`);
+  }
+
   if (futurePlotPoints.length) {
     lines.push("Do NOT show or hint at these future story beats:");
     for (const p of futurePlotPoints) {
@@ -1704,6 +2346,21 @@ function logStoryMetadataDebug(storyId: string, metadata: StoryMetadata) {
     const tag = p.type === "user_input" ? `input "${p.userInput}"` : "plot";
     console.log(`${LOG} [Metadata] Page ${p.page} (${tag}): ${p.description}`);
   }
+  if (metadata.blueprintReview) {
+    console.log(`${LOG} [Metadata] Blueprint review: ${metadata.blueprintReview.rating}/100 after ${metadata.blueprintReview.attempts} attempt(s)`);
+  }
+  if (metadata.architecture) {
+    console.log(`${LOG} [Metadata] Goal: ${metadata.architecture.protagonistGoal}`);
+    console.log(`${LOG} [Metadata] Problem: ${metadata.architecture.centralProblem}`);
+    console.log(`${LOG} [Metadata] Resolution: ${metadata.architecture.resolution}`);
+  }
+  if (metadata.storyboard?.length) {
+    console.log(`${LOG} [Metadata] Storyboard pages: ${metadata.storyboard.length}`);
+    for (const beat of metadata.storyboard.slice(0, 3)) {
+      console.log(`${LOG} [Metadata]   p${beat.page}: ${beat.beat.slice(0, 80)}`);
+    }
+    console.log(`${LOG} [Metadata]   ... (${metadata.storyboard.length} total)`);
+  }
   console.log(`${LOG} [Metadata] ====================================`);
 }
 
@@ -1816,10 +2473,10 @@ async function runGeneration(
     useTemplateFallback("OPENAI_API_KEY not set on edge function");
   } else {
     try {
-      const result = await generateStoryWithReview(inputs, openaiKey, childContext);
+      const result = await generateStoryFromBlueprint(inputs, openaiKey, childContext);
       story = { title: result.title, pages: result.pages };
       storyMeta = result.meta;
-      architectureMetadata = await buildStoryMetadata(story, inputs, childContext, openaiKey);
+      architectureMetadata = result.metadata;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       useTemplateFallback(reason);
